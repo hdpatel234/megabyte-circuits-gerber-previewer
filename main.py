@@ -11,6 +11,8 @@ import zipfile
 import tarfile
 import math
 import gerber
+import gerber_patch
+
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from fastapi.responses import FileResponse

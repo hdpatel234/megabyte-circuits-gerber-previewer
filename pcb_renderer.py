@@ -24,6 +24,8 @@ import math
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 import gerber
+import gerber_patch
+
 
 
 # ============================================================

@@ -1,5 +1,7 @@
 from pathlib import Path
 import gerber
+import gerber_patch
+
 
 
 # ---------------------------------------------------------

@@ -7,6 +7,8 @@ from pathlib import Path
 import math
 import re
 import gerber
+import gerber_patch
+
 from nc_drill_parser import parse_headerless_nc_drill
 
 
