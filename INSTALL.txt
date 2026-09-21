@@ -1,0 +1,16 @@
+V15 MACRO FLASH FIX
+
+Replace:
+  I:\DFM\gerber_viewer.py
+  I:\DFM\gerber_viewer.html
+
+This version preserves pcb-tools aperture-macro AMGroup flashes as compound
+browser geometry. V14 treated AMGroup as a Region; because its children are
+mostly Circle/Rectangle/Polygon flashes, they were discarded by the region
+path converter. V15 recursively renders those custom copper/mask flash pads.
+
+Restart:
+  cd I:\DFM
+  python -m uvicorn main:app --host 0.0.0.0 --port 8000
+
+Then Ctrl+F5 in the browser.

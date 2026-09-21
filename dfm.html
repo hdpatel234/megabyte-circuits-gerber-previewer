@@ -1,0 +1,1192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>PCB Gerber DFM Analyzer</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f4f6f8;
+    color: #172033;
+}
+
+header {
+    background: #172033;
+    color: white;
+    padding: 20px 32px;
+}
+
+header h1 {
+    margin: 0;
+    font-size: 24px;
+}
+
+header p {
+    margin: 6px 0 0;
+    color: #b9c2d0;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 30px auto;
+    padding: 0 20px;
+}
+
+.card {
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+}
+
+.card h2 {
+    margin-top: 0;
+}
+
+.upload-box {
+    border: 2px dashed #9aa6b2;
+    border-radius: 12px;
+    padding: 45px 20px;
+    text-align: center;
+    cursor: pointer;
+    background: #fafbfc;
+}
+
+.upload-box:hover {
+    border-color: #2563eb;
+    background: #f5f8ff;
+}
+
+.upload-box.dragover {
+    border-color: #2563eb;
+    background: #eef4ff;
+}
+
+.upload-icon {
+    font-size: 42px;
+    margin-bottom: 10px;
+}
+
+.upload-title {
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.upload-subtitle {
+    color: #6b7280;
+    margin-top: 8px;
+}
+
+input[type="file"] {
+    display: none;
+}
+
+.file-name {
+    margin-top: 15px;
+    font-weight: bold;
+}
+
+.actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+button {
+    border: 0;
+    border-radius: 7px;
+    padding: 11px 18px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.btn-primary {
+    background: #2563eb;
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #1d4ed8;
+}
+
+.btn-secondary {
+    background: #e5e7eb;
+    color: #172033;
+}
+
+.btn-success {
+    background: #15803d;
+    color: white;
+}
+
+button:disabled {
+    opacity: .5;
+    cursor: not-allowed;
+}
+
+.progress {
+    margin-top: 20px;
+    height: 8px;
+    background: #e5e7eb;
+    border-radius: 10px;
+    overflow: hidden;
+    display: none;
+}
+
+.progress-bar {
+    height: 100%;
+    width: 0%;
+    background: #2563eb;
+    transition: width .2s;
+}
+
+.status {
+    margin-top: 15px;
+    padding: 12px;
+    border-radius: 7px;
+    display: none;
+}
+
+.status.info {
+    display: block;
+    background: #eff6ff;
+    color: #1d4ed8;
+}
+
+.status.success {
+    display: block;
+    background: #ecfdf5;
+    color: #166534;
+}
+
+.status.error {
+    display: block;
+    background: #fef2f2;
+    color: #b91c1c;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 15px;
+}
+
+.stat {
+    background: #f8fafc;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 18px;
+}
+
+.stat-label {
+    color: #6b7280;
+    font-size: 13px;
+}
+
+.stat-value {
+    font-size: 23px;
+    font-weight: bold;
+    margin-top: 6px;
+}
+
+.result-section {
+    margin-top: 25px;
+}
+
+.result-section h3 {
+    border-bottom: 1px solid #e5e7eb;
+    padding-bottom: 8px;
+}
+
+pre {
+    background: #111827;
+    color: #e5e7eb;
+    padding: 15px;
+    border-radius: 8px;
+    overflow-x: auto;
+    max-height: 450px;
+    font-size: 12px;
+}
+
+.viewer-button {
+    margin-top: 15px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 5px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: bold;
+    margin-right: 5px;
+}
+
+.badge-success {
+    background: #dcfce7;
+    color: #166534;
+}
+
+.badge-warning {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.badge-error {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+footer {
+    text-align: center;
+    color: #6b7280;
+    padding: 30px;
+    font-size: 13px;
+}
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>PCB Gerber DFM Analyzer</h1>
+    <p>Upload Gerber / Excellon ZIP files and analyze your PCB</p>
+</header>
+
+<div class="container">
+
+    <!-- UPLOAD -->
+    <div class="card">
+
+        <h2>Upload PCB Gerber Files</h2>
+
+        <div id="uploadBox" class="upload-box">
+
+            <div class="upload-icon">📦</div>
+
+            <div class="upload-title">
+                Drop your Gerber ZIP file here
+            </div>
+
+            <div class="upload-subtitle">
+                or click to browse
+            </div>
+
+            <div class="file-name" id="fileName"></div>
+
+        </div>
+
+        <input
+            type="file"
+            id="fileInput"
+            accept=".zip,application/zip"
+        >
+
+        <div class="actions">
+
+            <button
+                id="analyzeBtn"
+                class="btn-primary"
+                disabled
+            >
+                Analyze PCB
+            </button>
+
+            <button
+                id="clearBtn"
+                class="btn-secondary"
+            >
+                Clear
+            </button>
+
+        </div>
+
+        <div class="progress" id="progress">
+            <div
+                class="progress-bar"
+                id="progressBar"
+            ></div>
+        </div>
+
+        <div id="status" class="status"></div>
+
+    </div>
+
+
+    <!-- RESULTS -->
+
+    <div
+        id="resultsCard"
+        class="card hidden"
+    >
+
+        <h2>Analysis Result</h2>
+
+        <div id="summaryGrid" class="summary-grid"></div>
+
+        <div class="result-section">
+
+            <h3>Project</h3>
+
+            <div id="projectInfo"></div>
+
+        </div>
+
+
+        <div class="result-section">
+
+            <h3>DFM Analysis</h3>
+
+            <div id="dfmInfo"></div>
+
+        </div>
+
+
+        <div class="result-section">
+
+            <h3>PCB Files / Layers</h3>
+
+            <div id="layersInfo"></div>
+
+        </div>
+
+
+        <div class="actions viewer-button">
+
+            <button
+                id="viewerBtn"
+                class="btn-success"
+            >
+                Open Gerber Vector Viewer
+            </button>
+
+        </div>
+
+
+        <div class="result-section">
+
+            <h3>Raw API Response</h3>
+
+            <pre id="rawResult"></pre>
+
+        </div>
+
+    </div>
+
+</div>
+
+<footer>
+    PCB Gerber DFM Analyzer
+</footer>
+
+
+<script>
+
+let selectedFile = null;
+let currentProjectId = null;
+
+const uploadBox =
+    document.getElementById("uploadBox");
+
+const fileInput =
+    document.getElementById("fileInput");
+
+const fileName =
+    document.getElementById("fileName");
+
+const analyzeBtn =
+    document.getElementById("analyzeBtn");
+
+const clearBtn =
+    document.getElementById("clearBtn");
+
+const statusBox =
+    document.getElementById("status");
+
+const progress =
+    document.getElementById("progress");
+
+const progressBar =
+    document.getElementById("progressBar");
+
+const resultsCard =
+    document.getElementById("resultsCard");
+
+const viewerBtn =
+    document.getElementById("viewerBtn");
+
+
+/* ============================================================
+   FILE SELECTION
+   ============================================================ */
+
+uploadBox.addEventListener(
+    "click",
+    () => fileInput.click()
+);
+
+
+fileInput.addEventListener(
+    "change",
+    () => {
+
+        if (!fileInput.files.length) {
+            return;
+        }
+
+        selectFile(fileInput.files[0]);
+    }
+);
+
+
+function selectFile(file) {
+
+    if (!file.name.toLowerCase().endsWith(".zip")) {
+
+        showStatus(
+            "Please select a ZIP file.",
+            "error"
+        );
+
+        return;
+    }
+
+    selectedFile = file;
+
+    fileName.innerText =
+        "Selected: " + file.name;
+
+    analyzeBtn.disabled = false;
+
+    showStatus(
+        "ZIP file ready for analysis.",
+        "info"
+    );
+}
+
+
+/* ============================================================
+   DRAG & DROP
+   ============================================================ */
+
+uploadBox.addEventListener(
+    "dragover",
+    event => {
+
+        event.preventDefault();
+
+        uploadBox.classList.add(
+            "dragover"
+        );
+    }
+);
+
+
+uploadBox.addEventListener(
+    "dragleave",
+    () => {
+
+        uploadBox.classList.remove(
+            "dragover"
+        );
+    }
+);
+
+
+uploadBox.addEventListener(
+    "drop",
+    event => {
+
+        event.preventDefault();
+
+        uploadBox.classList.remove(
+            "dragover"
+        );
+
+        if (
+            event.dataTransfer.files &&
+            event.dataTransfer.files.length
+        ) {
+
+            selectFile(
+                event.dataTransfer.files[0]
+            );
+        }
+    }
+);
+
+
+/* ============================================================
+   CLEAR
+   ============================================================ */
+
+clearBtn.addEventListener(
+    "click",
+    () => {
+
+        selectedFile = null;
+        currentProjectId = null;
+
+        fileInput.value = "";
+        fileName.innerText = "";
+
+        analyzeBtn.disabled = true;
+
+        resultsCard.classList.add(
+            "hidden"
+        );
+
+        progress.style.display = "none";
+
+        progressBar.style.width = "0%";
+
+        statusBox.className =
+            "status";
+
+        statusBox.innerText = "";
+    }
+);
+
+
+/* ============================================================
+   ANALYZE
+   ============================================================ */
+
+analyzeBtn.addEventListener(
+    "click",
+    analyzePCB
+);
+
+
+async function analyzePCB() {
+
+    if (!selectedFile) {
+        return;
+    }
+
+    analyzeBtn.disabled = true;
+
+    progress.style.display = "block";
+
+    progressBar.style.width = "10%";
+
+    showStatus(
+        "Uploading and analyzing PCB...",
+        "info"
+    );
+
+    const formData = new FormData();
+
+    /*
+       IMPORTANT:
+       Backend endpoint is /api/analyze
+    */
+
+    formData.append(
+        "file",
+        selectedFile
+    );
+
+    try {
+
+        progressBar.style.width = "30%";
+
+        const response =
+            await fetch(
+                "/api/analyze",
+                {
+                    method: "POST",
+                    body: formData
+                }
+            );
+
+        progressBar.style.width = "75%";
+
+        const text =
+            await response.text();
+
+        let data;
+
+        try {
+
+            data = JSON.parse(text);
+
+        } catch {
+
+            throw new Error(
+                "Server returned invalid JSON:\n" +
+                text
+            );
+        }
+
+
+        if (!response.ok) {
+
+            throw new Error(
+                data.detail ||
+                data.error ||
+                "PCB analysis failed."
+            );
+        }
+
+
+        progressBar.style.width = "100%";
+
+        displayResults(data);
+
+        showStatus(
+            "PCB analysis completed successfully.",
+            "success"
+        );
+
+    }
+
+    catch (error) {
+
+        console.error(error);
+
+        showStatus(
+            error.message ||
+            "Analysis failed.",
+            "error"
+        );
+
+    }
+
+    finally {
+
+        analyzeBtn.disabled = false;
+
+        setTimeout(
+            () => {
+                progress.style.display = "none";
+            },
+            700
+        );
+    }
+}
+
+
+/* ============================================================
+   DISPLAY RESULTS
+   ============================================================ */
+
+function displayResults(data) {
+
+    resultsCard.classList.remove(
+        "hidden"
+    );
+
+    document.getElementById(
+        "rawResult"
+    ).textContent =
+        JSON.stringify(
+            data,
+            null,
+            2
+        );
+
+
+    /*
+       Find project ID from common
+       response structures.
+    */
+
+    currentProjectId =
+        data.project_id ||
+        data.projectId ||
+        (data.project &&
+         data.project.id) ||
+        (data.project &&
+         data.project.project_id) ||
+        null;
+
+
+    renderSummary(data);
+
+    renderProjectInfo(data);
+
+    renderDFMInfo(data);
+
+    renderLayers(data);
+}
+
+
+/* ============================================================
+   SUMMARY
+   ============================================================ */
+
+function renderSummary(data) {
+
+    const grid =
+        document.getElementById(
+            "summaryGrid"
+        );
+
+    grid.innerHTML = "";
+
+
+    const board =
+        data.board_size ||
+        data.board ||
+        data.board_dimensions ||
+        {};
+
+
+    const width =
+        board.width_mm ||
+        board.width ||
+        data.width_mm;
+
+
+    const height =
+        board.height_mm ||
+        board.height ||
+        data.height_mm;
+
+
+    addStat(
+        grid,
+        "Board Width",
+        formatValue(width, "mm")
+    );
+
+    addStat(
+        grid,
+        "Board Height",
+        formatValue(height, "mm")
+    );
+
+
+    const layers =
+        data.layers ||
+        data.layer_count ||
+        data.total_layers;
+
+
+    addStat(
+        grid,
+        "Layers",
+        formatValue(layers, "")
+    );
+
+
+    const drills =
+        data.drill_hits_rendered ||
+        data.drill_count ||
+        data.total_drills;
+
+
+    addStat(
+        grid,
+        "Drill Hits",
+        formatValue(drills, "")
+    );
+}
+
+
+function addStat(
+    parent,
+    label,
+    value
+) {
+
+    const div =
+        document.createElement("div");
+
+    div.className = "stat";
+
+    div.innerHTML =
+        `
+        <div class="stat-label">
+            ${escapeHtml(label)}
+        </div>
+
+        <div class="stat-value">
+            ${escapeHtml(String(value ?? "-"))}
+        </div>
+        `;
+
+    parent.appendChild(div);
+}
+
+
+function formatValue(
+    value,
+    unit
+) {
+
+    if (
+        value === undefined ||
+        value === null ||
+        value === ""
+    ) {
+        return "-";
+    }
+
+    return unit
+        ? `${value} ${unit}`
+        : value;
+}
+
+
+/* ============================================================
+   PROJECT
+   ============================================================ */
+
+function renderProjectInfo(data) {
+
+    const el =
+        document.getElementById(
+            "projectInfo"
+        );
+
+    const project =
+        data.project || data;
+
+
+    el.innerHTML =
+        `
+        <p>
+            <strong>Project ID:</strong>
+            ${escapeHtml(
+                currentProjectId || "-"
+            )}
+        </p>
+
+        <p>
+            <strong>Project Name:</strong>
+            ${escapeHtml(
+                project.name ||
+                project.project_name ||
+                selectedFile?.name ||
+                "-"
+            )}
+        </p>
+        `;
+}
+
+
+/* ============================================================
+   DFM
+   ============================================================ */
+
+function renderDFMInfo(data) {
+
+    const el =
+        document.getElementById(
+            "dfmInfo"
+        );
+
+    const analysis =
+        data.analysis ||
+        data.dfm ||
+        data.results ||
+        data;
+
+
+    let html = "";
+
+
+    const status =
+        data.status ||
+        analysis.status;
+
+
+    if (status) {
+
+        const lower =
+            String(status).toLowerCase();
+
+        let cls =
+            "badge-success";
+
+        if (
+            lower.includes("warning")
+        ) {
+            cls =
+                "badge-warning";
+        }
+
+        if (
+            lower.includes("error") ||
+            lower.includes("fail")
+        ) {
+            cls =
+                "badge-error";
+        }
+
+        html +=
+            `
+            <span class="badge ${cls}">
+                ${escapeHtml(
+                    String(status)
+                )}
+            </span>
+            `;
+    }
+
+
+    const warnings =
+        data.warnings ||
+        analysis.warnings;
+
+
+    const errors =
+        data.errors ||
+        analysis.errors;
+
+
+    if (
+        Array.isArray(warnings) &&
+        warnings.length
+    ) {
+
+        html +=
+            `
+            <h4>Warnings</h4>
+            <ul>
+            ${
+                warnings.map(
+                    item =>
+                    `<li>${escapeHtml(
+                        typeof item === "string"
+                            ? item
+                            : JSON.stringify(item)
+                    )}</li>`
+                ).join("")
+            }
+            </ul>
+            `;
+    }
+
+
+    if (
+        Array.isArray(errors) &&
+        errors.length
+    ) {
+
+        html +=
+            `
+            <h4>Errors</h4>
+            <ul>
+            ${
+                errors.map(
+                    item =>
+                    `<li>${escapeHtml(
+                        typeof item === "string"
+                            ? item
+                            : JSON.stringify(item)
+                    )}</li>`
+                ).join("")
+            }
+            </ul>
+            `;
+    }
+
+
+    if (!html) {
+
+        html =
+            `<p>
+                Analysis data is available in
+                the raw response below.
+            </p>`;
+    }
+
+
+    el.innerHTML = html;
+}
+
+
+/* ============================================================
+   LAYERS
+   ============================================================ */
+
+function renderLayers(data) {
+
+    const el =
+        document.getElementById(
+            "layersInfo"
+        );
+
+
+    const layers =
+        data.layers ||
+        data.files ||
+        data.project_files;
+
+
+    if (
+        !Array.isArray(layers)
+    ) {
+
+        el.innerHTML =
+            `<p>
+                Layer/file information is
+                available in the raw response.
+            </p>`;
+
+        return;
+    }
+
+
+    const table =
+        document.createElement(
+            "table"
+        );
+
+
+    table.style.width = "100%";
+    table.style.borderCollapse =
+        "collapse";
+
+
+    table.innerHTML =
+        `
+        <thead>
+            <tr>
+                <th style="text-align:left;padding:10px;border-bottom:1px solid #ddd">
+                    Name
+                </th>
+
+                <th style="text-align:left;padding:10px;border-bottom:1px solid #ddd">
+                    Layer
+                </th>
+            </tr>
+        </thead>
+        `;
+
+
+    const tbody =
+        document.createElement(
+            "tbody"
+        );
+
+
+    layers.forEach(
+        item => {
+
+            const tr =
+                document.createElement(
+                    "tr"
+                );
+
+            const name =
+                item.filename ||
+                item.name ||
+                item.file ||
+                "-";
+
+            const layer =
+                item.layer ||
+                item.type ||
+                "-";
+
+
+            tr.innerHTML =
+                `
+                <td style="padding:10px;border-bottom:1px solid #eee">
+                    ${escapeHtml(
+                        String(name)
+                    )}
+                </td>
+
+                <td style="padding:10px;border-bottom:1px solid #eee">
+                    ${escapeHtml(
+                        String(layer)
+                    )}
+                </td>
+                `;
+
+
+            tbody.appendChild(tr);
+        }
+    );
+
+
+    table.appendChild(tbody);
+
+    el.innerHTML = "";
+
+    el.appendChild(table);
+}
+
+
+/* ============================================================
+   VIEWER
+   ============================================================ */
+
+viewerBtn.addEventListener(
+    "click",
+    () => {
+
+        if (!currentProjectId) {
+
+            showStatus(
+                "Project ID was not found in the analysis response.",
+                "error"
+            );
+
+            return;
+        }
+
+
+        window.location.href =
+            "/gerber_viewer.html?project_id=" +
+            encodeURIComponent(
+                currentProjectId
+            );
+    }
+);
+
+
+/* ============================================================
+   STATUS
+   ============================================================ */
+
+function showStatus(
+    message,
+    type
+) {
+
+    statusBox.className =
+        "status " + type;
+
+    statusBox.innerText =
+        message;
+}
+
+
+/* ============================================================
+   HTML ESCAPE
+   ============================================================ */
+
+function escapeHtml(value) {
+
+    return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
+
+</script>
+
+</body>
+</html>

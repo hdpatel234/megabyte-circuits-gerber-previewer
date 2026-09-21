@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCB Gerber Vector Viewer</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;font-family:Arial,sans-serif;background:#111;color:#eee}
+#toolbar{height:54px;display:flex;align-items:center;gap:7px;padding:8px 10px;background:#191919;border-bottom:1px solid #333}
+button{background:#292929;color:#eee;border:1px solid #444;border-radius:5px;padding:7px 11px;cursor:pointer}
+button:hover{background:#383838}
+#status{margin-left:8px;font-size:12px;color:#bbb;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#main{height:calc(100vh - 54px);display:flex}
+#layers{width:260px;flex:0 0 260px;background:#181818;border-right:1px solid #333;overflow:auto;padding:12px}
+#layers h3{margin:0 0 10px;font-size:14px}
+.layer{display:flex;align-items:center;gap:7px;padding:7px;border-radius:5px;font-size:12px}
+.layer:hover{background:#292929}
+.swatch{width:13px;height:13px;border-radius:2px;border:1px solid #555;flex:0 0 auto}
+.layer-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#viewer{position:relative;flex:1;background:#222;overflow:hidden}
+#canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+#info{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.72);border:1px solid #333;border-radius:5px;padding:7px 9px;font-size:11px;color:#bbb;pointer-events:none}
+#coords{position:absolute;right:10px;bottom:10px;background:rgba(0,0,0,.72);border:1px solid #333;border-radius:5px;padding:7px 9px;font-size:11px;color:#bbb;pointer-events:none}
+.error{color:#ff8c8c}
+</style>
+</head>
+<body>
+<div id="toolbar">
+    <button onclick="fitBoard()">Fit</button>
+    <button onclick="zoomBy(1.25)">+</button>
+    <button onclick="zoomBy(0.8)">−</button>
+    <button onclick="resetView()">Reset</button>
+    <button onclick="setSide('top')">Top</button>
+    <button onclick="setSide('bottom')">Bottom</button>
+    <button onclick="setAll(true)">All</button>
+    <button onclick="setAll(false)">None</button>
+    <span id="status">Loading…</span>
+</div>
+
+<div id="main">
+    <aside id="layers">
+        <h3>Gerber Layers</h3>
+        <div id="layerList"></div>
+    </aside>
+    <section id="viewer">
+        <canvas id="canvas"></canvas>
+        <div id="info">Wheel = zoom · Drag = pan · Double-click = fit</div>
+        <div id="coords">X: — · Y: —</div>
+    </section>
+</div>
+
+<script>
+"use strict";
+
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+const layerList = document.getElementById("layerList");
+const statusEl = document.getElementById("status");
+const coordsEl = document.getElementById("coords");
+
+let viewerData = null;
+let visible = [];
+let minX = 0, minY = 0, maxX = 100, maxY = 100;
+let zoom = 1;
+let offsetX = 0, offsetY = 0;
+let dragging = false;
+let dragStartX = 0, dragStartY = 0;
+let oldOffsetX = 0, oldOffsetY = 0;
+let dpr = 1;
+
+const layerColors = {
+    "Board Outline": "#ffffff",
+    "Top Copper": "#d9a62e",
+    "Bottom Copper": "#a7652f",
+    "Top Solder Mask": "rgba(25,155,75,.48)",
+    "Bottom Solder Mask": "rgba(20,105,60,.38)",
+    "Top Silkscreen": "#eeeeee",
+    "Bottom Silkscreen": "#aaaaaa"
+};
+
+function colorFor(name){
+    if(layerColors[name]) return layerColors[name];
+    if(String(name).toLowerCase().startsWith("inner copper")) return "#c58b2a";
+    return "#bdbdbd";
+}
+
+function isClearPolarity(p){
+    const s = String(p?.polarity || "dark").toLowerCase();
+    return s.includes("clear") || s.includes("negative");
+}
+
+function resizeCanvas(){
+    const rect = canvas.getBoundingClientRect();
+    dpr = Math.max(1, window.devicePixelRatio || 1);
+    canvas.width = Math.max(1, Math.round(rect.width*dpr));
+    canvas.height = Math.max(1, Math.round(rect.height*dpr));
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    fitBoard(false);
+}
+
+function viewportWidth(){ return canvas.clientWidth || 1; }
+function viewportHeight(){ return canvas.clientHeight || 1; }
+
+function worldToScreen(x,y){
+    return [
+        (x-minX)*zoom + offsetX,
+        (maxY-y)*zoom + offsetY
+    ];
+}
+
+function mmToPx(mm){ return mm*zoom; }
+
+function screenToWorld(sx,sy){
+    return [
+        sx/zoom + minX - offsetX/zoom,
+        maxY - ((sy-offsetY)/zoom)
+    ];
+}
+
+function calculateBounds(){
+    const b = viewerData && viewerData.board_bounds;
+    if(b && Number.isFinite(b.x_min) && Number.isFinite(b.x_max) &&
+       Number.isFinite(b.y_min) && Number.isFinite(b.y_max) &&
+       b.x_max > b.x_min && b.y_max > b.y_min){
+        minX=b.x_min; maxX=b.x_max; minY=b.y_min; maxY=b.y_max;
+        return;
+    }
+
+    const outline = (viewerData?.layers || []).find(
+        l => String(l.layer||"").toLowerCase()==="board outline"
+    );
+    const candidates = outline ? [outline] : (viewerData?.layers || []);
+    const xs=[], ys=[];
+
+    for(const layer of candidates){
+        const b2=layer?.geometry?.bounds;
+        if(b2){
+            xs.push(b2.x_min,b2.x_max);
+            ys.push(b2.y_min,b2.y_max);
+        }
+    }
+
+    if(xs.length){
+        minX=Math.min(...xs); maxX=Math.max(...xs);
+        minY=Math.min(...ys); maxY=Math.max(...ys);
+    }else{
+        minX=0; minY=0; maxX=100; maxY=100;
+    }
+}
+
+function fitBoard(redraw=true){
+    const bw=Math.max(maxX-minX,0.001);
+    const bh=Math.max(maxY-minY,0.001);
+    const sx=viewportWidth()/bw;
+    const sy=viewportHeight()/bh;
+    zoom=Math.min(sx,sy)*0.88;
+    offsetX=(viewportWidth()-bw*zoom)/2;
+    offsetY=(viewportHeight()-bh*zoom)/2;
+    if(redraw) render();
+}
+
+function resetView(){ fitBoard(true); }
+function zoomBy(f){ zoom=Math.max(0.001,Math.min(100000,zoom*f)); render(); }
+
+function setAll(value){
+    visible=visible.map(()=>value);
+    buildLayerList();
+    render();
+}
+
+function setSide(side){
+    visible=viewerData.layers.map(l=>{
+        const n=String(l.layer||"").toLowerCase();
+        if(side==="top") return !n.includes("bottom");
+        if(side==="bottom") return !n.includes("top");
+        return true;
+    });
+    buildLayerList();
+    render();
+}
+
+function buildLayerList(){
+    layerList.innerHTML="";
+    (viewerData?.layers||[]).forEach((layer,i)=>{
+        const row=document.createElement("label");
+        row.className="layer";
+
+        const cb=document.createElement("input");
+        cb.type="checkbox";
+        cb.checked=visible[i] !== false;
+        cb.addEventListener("change",()=>{ visible[i]=cb.checked; render(); });
+
+        const sw=document.createElement("span");
+        sw.className="swatch";
+        sw.style.background=colorFor(layer.layer);
+
+        const name=document.createElement("span");
+        name.className="layer-name";
+        name.title=layer.filename || layer.layer || "";
+        name.textContent=layer.layer || layer.filename || "Unknown";
+
+        row.append(cb,sw,name);
+        layerList.appendChild(row);
+    });
+}
+
+function clearLayerCanvas(c){
+    c.clearRect(0,0,viewportWidth(),viewportHeight());
+}
+
+function drawPrimitive(c,p,color){
+    if(!p) return;
+
+    const clear=isClearPolarity(p);
+    c.save();
+    c.globalCompositeOperation=clear ? "destination-out" : "source-over";
+    c.fillStyle=color;
+    c.strokeStyle=color;
+    c.lineCap="round";
+    c.lineJoin="round";
+
+    if(p.type==="line"){
+        if(!p.start || !p.end){ c.restore(); return; }
+        const a=worldToScreen(p.start[0],p.start[1]);
+        const b=worldToScreen(p.end[0],p.end[1]);
+        c.beginPath();
+        c.lineWidth=Math.max(0.5,mmToPx(Number(p.width)||0.05));
+        c.moveTo(a[0],a[1]); c.lineTo(b[0],b[1]); c.stroke();
+        c.restore(); return;
+    }
+
+    if(p.type==="polyline"){
+        const pts=Array.isArray(p.points)?p.points:[];
+        if(pts.length<2){ c.restore(); return; }
+        c.beginPath();
+        const first=worldToScreen(pts[0][0],pts[0][1]);
+        c.moveTo(first[0],first[1]);
+        for(let i=1;i<pts.length;i++){
+            const q=worldToScreen(pts[i][0],pts[i][1]);
+            c.lineTo(q[0],q[1]);
+        }
+        c.lineWidth=Math.max(0.5,mmToPx(Number(p.width)||0.05));
+        c.stroke();
+        c.restore(); return;
+    }
+
+    if(p.type==="circle" || p.type==="flash"){
+        const center=p.center || p.position;
+        if(!center){ c.restore(); return; }
+        const r=Math.max(0,mmToPx((Number(p.diameter)||0)/2));
+        if(r<=0){ c.restore(); return; }
+        const q=worldToScreen(center[0],center[1]);
+        c.beginPath(); c.arc(q[0],q[1],r,0,Math.PI*2); c.fill();
+
+        if(!clear && Number(p.hole_diameter)>0){
+            c.globalCompositeOperation="destination-out";
+            c.beginPath();
+            c.arc(q[0],q[1],mmToPx(Number(p.hole_diameter)/2),0,Math.PI*2);
+            c.fill();
+        }
+        c.restore(); return;
+    }
+
+    if(p.type==="rectangle"){
+        const [x,y]=p.position || [0,0];
+        const w=Number(p.width)||0, h=Number(p.height)||0;
+        const a=-(Number(p.rotation)||0)*Math.PI/180;
+        c.translate(...worldToScreen(x,y));
+        c.rotate(a);
+        c.beginPath();
+        c.rect(-mmToPx(w/2),-mmToPx(h/2),mmToPx(w),mmToPx(h));
+        c.fill();
+        c.restore(); return;
+    }
+
+    if(p.type==="obround"){
+        drawObround(c,p,color,clear);
+        c.restore(); return;
+    }
+
+    if(p.type==="region"){
+        const paths=Array.isArray(p.paths)?p.paths:[];
+        if(!paths.length){ c.restore(); return; }
+        c.beginPath();
+        for(const path of paths){
+            if(!Array.isArray(path)||path.length<3) continue;
+            const q0=worldToScreen(path[0][0],path[0][1]);
+            c.moveTo(q0[0],q0[1]);
+            for(let i=1;i<path.length;i++){
+                const q=worldToScreen(path[i][0],path[i][1]);
+                c.lineTo(q[0],q[1]);
+            }
+            c.closePath();
+        }
+        c.fill("evenodd");
+        c.restore(); return;
+    }
+
+    c.restore();
+}
+
+function drawObround(c,p,color,clear){
+    const [cx,cy]=p.position || [0,0];
+    const w=Math.abs(Number(p.width)||0);
+    const h=Math.abs(Number(p.height)||0);
+    const rotation=Number(p.rotation)||0;
+
+    if(w<=0 || h<=0) return;
+
+    // Build the capsule in Gerber/world coordinates, then transform every point.
+    const pts=[];
+    const steps=24;
+
+    if(w>=h){
+        const r=h/2;
+        const straight=(w-h)/2;
+
+        for(let i=0;i<=steps;i++){
+            const t=i/steps;
+            const a=-Math.PI/2 + Math.PI*t;
+            pts.push([straight+r*Math.cos(a), r*Math.sin(a)]);
+        }
+        for(let i=0;i<=steps;i++){
+            const t=i/steps;
+            const a=Math.PI/2 + Math.PI*t;
+            pts.push([-straight+r*Math.cos(a), r*Math.sin(a)]);
+        }
+    }else{
+        const r=w/2;
+        const straight=(h-w)/2;
+
+        for(let i=0;i<=steps;i++){
+            const t=i/steps;
+            const a=0 + Math.PI*t;
+            pts.push([r*Math.cos(a), straight+r*Math.sin(a)]);
+        }
+        for(let i=0;i<=steps;i++){
+            const t=i/steps;
+            const a=Math.PI + Math.PI*t;
+            pts.push([r*Math.cos(a), -straight+r*Math.sin(a)]);
+        }
+    }
+
+    const a=rotation*Math.PI/180;
+    const ca=Math.cos(a), sa=Math.sin(a);
+
+    c.beginPath();
+    pts.forEach((pt,i)=>{
+        const x=cx+pt[0]*ca-pt[1]*sa;
+        const y=cy+pt[0]*sa+pt[1]*ca;
+        const q=worldToScreen(x,y);
+        if(i===0) c.moveTo(q[0],q[1]); else c.lineTo(q[0],q[1]);
+    });
+    c.closePath();
+    c.fill();
+}
+
+function render(){
+    const w=viewportWidth(), h=viewportHeight();
+    ctx.setTransform(dpr,0,0,dpr,0,0);
+    ctx.clearRect(0,0,w,h);
+    ctx.fillStyle="#222";
+    ctx.fillRect(0,0,w,h);
+
+    if(!viewerData) return;
+
+    // Each Gerber layer gets its own transparent canvas. This is important:
+    // destination-out for a hole/clear feature must not erase other layers.
+    for(let i=0;i<viewerData.layers.length;i++){
+        if(visible[i]===false) continue;
+        const layer=viewerData.layers[i];
+        const lc=document.createElement("canvas");
+        lc.width=Math.max(1,Math.round(w*dpr));
+        lc.height=Math.max(1,Math.round(h*dpr));
+        const lctx=lc.getContext("2d");
+        lctx.setTransform(dpr,0,0,dpr,0,0);
+
+        const color=colorFor(layer.layer);
+        for(const p of (layer.geometry?.primitives||[])){
+            drawPrimitive(lctx,p,color);
+        }
+
+        ctx.drawImage(lc,0,0,w,h);
+    }
+
+    // Always draw a clean viewport outline from the selected board bounds.
+    ctx.save();
+    ctx.strokeStyle="#ffffff";
+    ctx.lineWidth=1.5;
+    ctx.strokeRect(
+        ...worldToScreen(minX,maxY),
+        mmToPx(maxX-minX),
+        mmToPx(maxY-minY)
+    );
+    ctx.restore();
+}
+
+async function loadViewer(){
+    const projectId=new URLSearchParams(location.search).get("project_id");
+    if(!projectId){
+        statusEl.textContent="Missing project_id";
+        statusEl.className="error";
+        return;
+    }
+
+    try{
+        const response=await fetch(
+            `/api/project/${encodeURIComponent(projectId)}/viewer`,
+            {cache:"no-store"}
+        );
+        if(!response.ok) throw new Error(`Viewer API failed (${response.status})`);
+
+        const data=await response.json();
+        if(!data || !data.viewer) throw new Error("Invalid viewer response");
+
+        viewerData=data.viewer;
+        visible=(viewerData.layers||[]).map(()=>true);
+        calculateBounds();
+        buildLayerList();
+        resizeCanvas();
+
+        const bb=viewerData.board_bounds;
+        const dims=bb
+            ? `${bb.width_mm.toFixed(3)} × ${bb.height_mm.toFixed(3)} mm`
+            : "board size unavailable";
+
+        statusEl.textContent=
+            `${viewerData.layers.length} layers · ${dims} · ${viewerData.geometry_version||"legacy"}`;
+
+        render();
+    }catch(err){
+        console.error(err);
+        statusEl.textContent=err.message || "Viewer error";
+        statusEl.className="error";
+    }
+}
+
+canvas.addEventListener("wheel",e=>{
+    e.preventDefault();
+    if(!viewerData) return;
+
+    const rect=canvas.getBoundingClientRect();
+    const mx=e.clientX-rect.left;
+    const my=e.clientY-rect.top;
+    const before=screenToWorld(mx,my);
+    const factor=e.deltaY<0 ? 1.15 : 1/1.15;
+    zoom=Math.max(0.001,Math.min(100000,zoom*factor));
+    const after=worldToScreen(before[0],before[1]);
+    offsetX += mx-after[0];
+    offsetY += my-after[1];
+    render();
+},{passive:false});
+
+canvas.addEventListener("mousedown",e=>{
+    dragging=true;
+    dragStartX=e.clientX;
+    dragStartY=e.clientY;
+    oldOffsetX=offsetX;
+    oldOffsetY=offsetY;
+});
+
+window.addEventListener("mousemove",e=>{
+    if(!dragging) return;
+    offsetX=oldOffsetX+(e.clientX-dragStartX);
+    offsetY=oldOffsetY+(e.clientY-dragStartY);
+    render();
+});
+
+window.addEventListener("mouseup",()=>dragging=false);
+
+canvas.addEventListener("dblclick",()=>fitBoard(true));
+
+canvas.addEventListener("mousemove",e=>{
+    if(!viewerData) return;
+    const rect=canvas.getBoundingClientRect();
+    const [x,y]=screenToWorld(
+        e.clientX-rect.left,
+        e.clientY-rect.top
+    );
+    coordsEl.textContent=`X: ${x.toFixed(3)} · Y: ${y.toFixed(3)} mm`;
+});
+
+window.addEventListener("resize",resizeCanvas);
+
+loadViewer();
+</script>
+</body>
+</html>

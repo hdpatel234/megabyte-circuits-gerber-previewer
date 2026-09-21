@@ -1,0 +1,2645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PCB Gerber Vector Viewer</title>
+
+<style>
+*{box-sizing:border-box}
+
+html,body{
+    margin:0;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+    font-family:Arial,sans-serif;
+    background:#e7e9ec;
+    color:#222;
+}
+
+#toolbar{
+    height:54px;
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:8px 10px;
+    background:#fff;
+    border-bottom:1px solid #d0d3d6;
+}
+
+button{
+    background:#f4f5f6;
+    color:#222;
+    border:1px solid #c9cdd1;
+    border-radius:5px;
+    padding:7px 11px;
+    cursor:pointer;
+}
+
+button:hover{
+    background:#e4e7e9;
+}
+
+#status{
+    margin-left:8px;
+    font-size:12px;
+    color:#666;
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+}
+
+#main{
+    height:calc(100vh - 54px);
+    display:flex;
+}
+
+#layers{
+    width:260px;
+    flex:0 0 260px;
+    background:#fff;
+    border-right:1px solid #d0d3d6;
+    overflow:auto;
+    padding:12px;
+}
+
+#layers h3{
+    margin:0 0 10px;
+    font-size:14px;
+}
+
+.layer{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:7px;
+    border-radius:5px;
+    font-size:12px;
+}
+
+.layer:hover{
+    background:#f0f1f2;
+}
+
+.swatch{
+    width:13px;
+    height:13px;
+    border-radius:2px;
+    border:1px solid #777;
+    flex:0 0 auto;
+}
+
+.layer-name{
+    overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
+}
+
+#viewer{
+    position:relative;
+    flex:1;
+    background:#e7e9ec;
+    overflow:hidden;
+}
+
+#canvas{
+    position:absolute;
+    inset:0;
+    width:100%;
+    height:100%;
+    display:block;
+    cursor:crosshair;
+}
+
+#info,
+#coords{
+    position:absolute;
+    bottom:10px;
+    background:rgba(255,255,255,.88);
+    border:1px solid #cfd3d6;
+    border-radius:5px;
+    padding:7px 9px;
+    font-size:11px;
+    color:#555;
+    pointer-events:none;
+}
+
+#info{
+    left:10px;
+}
+
+#coords{
+    right:10px;
+}
+
+.error{
+    color:#d33;
+}
+</style>
+</head>
+
+<body>
+
+<div id="toolbar">
+    <button onclick="fitBoard()">Fit</button>
+    <button onclick="zoomBy(1.25)">+</button>
+    <button onclick="zoomBy(0.8)">−</button>
+    <button onclick="resetView()">Reset</button>
+    <button onclick="renderComposite('top')">PCB Top</button>
+    <button onclick="renderComposite('bottom')">PCB Bottom</button>
+    <button onclick="setSide('top')">Raw Top</button>
+    <button onclick="setSide('bottom')">Raw Bottom</button>
+    <button onclick="setAll(true)">All</button>
+    <button onclick="setAll(false)">None</button>
+    <span id="status">Loading…</span>
+</div>
+
+<div id="main">
+
+    <aside id="layers">
+        <h3>Gerber Layers</h3>
+        <div id="layerList"></div>
+    </aside>
+
+    <section id="viewer">
+        <canvas id="canvas"></canvas>
+        <div id="info">Wheel = zoom · Drag = pan · Double-click = fit</div>
+        <div id="coords">X: — · Y: —</div>
+    </section>
+
+</div>
+
+<script>
+"use strict";
+
+const canvas=document.getElementById("canvas");
+const ctx=canvas.getContext("2d");
+const layerList=document.getElementById("layerList");
+const statusEl=document.getElementById("status");
+const coordsEl=document.getElementById("coords");
+
+let viewerData=null;
+let visible=[];
+let currentSide="top";
+
+let minX=0;
+let minY=0;
+let maxX=100;
+let maxY=100;
+
+let zoom=1;
+let offsetX=0;
+let offsetY=0;
+
+let dragging=false;
+let dragStartX=0;
+let dragStartY=0;
+let oldOffsetX=0;
+let oldOffsetY=0;
+
+let dpr=1;
+
+
+/* ============================================================
+   PCB/JLC STYLE COLORS
+   ============================================================
+
+   Copper artwork itself is GOLD.
+
+   Solder mask is rendered as a SOLID FILM over copper.
+
+   Therefore:
+
+       covered copper trace = GREEN
+       exposed copper pad   = GOLD
+
+   Mask openings are cut out of the mask film and expose
+   the original copper underneath.
+   ============================================================ */
+
+const PCB_COLORS={
+    board:"#186831",
+
+    copperCovered:"#29783B",
+    copperExposed:"#E4BA4D",
+
+    solderMask:"#186831",
+
+    silkscreen:"#FFFFFF",
+
+    drill:"#111111",
+
+    outline:"#FFFFFF",
+
+    background:"#E7E9EC"
+};
+
+
+/* Colors used by individual/raw layer view */
+const layerColors={
+    "Board Outline":PCB_COLORS.outline,
+
+    "Top Copper":PCB_COLORS.copperExposed,
+    "Bottom Copper":PCB_COLORS.copperExposed,
+
+    "Top Solder Mask":PCB_COLORS.solderMask,
+    "Bottom Solder Mask":PCB_COLORS.solderMask,
+
+    "Top Silkscreen":PCB_COLORS.silkscreen,
+    "Bottom Silkscreen":PCB_COLORS.silkscreen,
+
+    "Drill":PCB_COLORS.drill,
+    "PTH Drill":PCB_COLORS.drill,
+    "NPTH Drill":PCB_COLORS.drill,
+
+    "Drill Drawing":"#ffffff"
+};
+
+
+function colorFor(name){
+
+    if(layerColors[name]){
+        return layerColors[name];
+    }
+
+    if(
+        String(name)
+        .toLowerCase()
+        .startsWith("inner copper")
+    ){
+        return PCB_COLORS.copperExposed;
+    }
+
+    return "#bdbdbd";
+}
+
+
+/* ============================================================
+   POLARITY
+   ============================================================ */
+
+function isClearPolarity(p){
+
+    const s=String(
+        p?.polarity || "dark"
+    ).toLowerCase();
+
+    return (
+        s.includes("clear") ||
+        s.includes("negative")
+    );
+}
+
+
+/* ============================================================
+   CANVAS
+   ============================================================ */
+
+function resizeCanvas(){
+
+    const rect=canvas.getBoundingClientRect();
+
+    dpr=Math.max(
+        1,
+        window.devicePixelRatio || 1
+    );
+
+    canvas.width=Math.max(
+        1,
+        Math.round(rect.width*dpr)
+    );
+
+    canvas.height=Math.max(
+        1,
+        Math.round(rect.height*dpr)
+    );
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+    fitBoard(false);
+}
+
+
+function viewportWidth(){
+    return canvas.clientWidth || 1;
+}
+
+
+function viewportHeight(){
+    return canvas.clientHeight || 1;
+}
+
+
+function worldToScreen(x,y){
+
+    return [
+        (x-minX)*zoom+offsetX,
+        (maxY-y)*zoom+offsetY
+    ];
+}
+
+
+function mmToPx(mm){
+    return mm*zoom;
+}
+
+
+/* ============================================================
+   BOTTOM SIDE MIRROR
+   ============================================================ */
+
+function applyBottomMirror(c,w){
+
+    if(currentSide==="bottom"){
+        c.translate(w,0);
+        c.scale(-1,1);
+    }
+}
+
+
+function screenToWorld(sx,sy){
+
+    if(currentSide==="bottom"){
+        sx=viewportWidth()-sx;
+    }
+
+    return [
+        sx/zoom+minX-offsetX/zoom,
+        maxY-((sy-offsetY)/zoom)
+    ];
+}
+
+
+/* ============================================================
+   BOARD BOUNDS
+   ============================================================ */
+
+function calculateBounds(){
+
+    const b=
+        viewerData &&
+        viewerData.board_bounds;
+
+    if(
+        b &&
+        Number.isFinite(b.x_min) &&
+        Number.isFinite(b.x_max) &&
+        Number.isFinite(b.y_min) &&
+        Number.isFinite(b.y_max) &&
+        b.x_max>b.x_min &&
+        b.y_max>b.y_min
+    ){
+
+        minX=b.x_min;
+        maxX=b.x_max;
+        minY=b.y_min;
+        maxY=b.y_max;
+
+        return;
+    }
+
+
+    const outline=
+        (viewerData?.layers || []).find(
+            l =>
+                String(l.layer||"")
+                .toLowerCase()==="board outline"
+        );
+
+
+    const candidates=
+        outline
+        ? [outline]
+        : (viewerData?.layers || []);
+
+
+    const xs=[];
+    const ys=[];
+
+
+    for(const layer of candidates){
+
+        const b2=
+            layer?.geometry?.bounds;
+
+        if(b2){
+
+            xs.push(
+                b2.x_min,
+                b2.x_max
+            );
+
+            ys.push(
+                b2.y_min,
+                b2.y_max
+            );
+        }
+    }
+
+
+    if(xs.length){
+
+        minX=Math.min(...xs);
+        maxX=Math.max(...xs);
+
+        minY=Math.min(...ys);
+        maxY=Math.max(...ys);
+
+    }else{
+
+        minX=0;
+        minY=0;
+        maxX=100;
+        maxY=100;
+    }
+}
+
+
+/* ============================================================
+   VIEW
+   ============================================================ */
+
+function fitBoard(redraw=true){
+
+    const bw=Math.max(
+        maxX-minX,
+        0.001
+    );
+
+    const bh=Math.max(
+        maxY-minY,
+        0.001
+    );
+
+    const sx=
+        viewportWidth()/bw;
+
+    const sy=
+        viewportHeight()/bh;
+
+    zoom=
+        Math.min(sx,sy)*0.88;
+
+    offsetX=
+        (viewportWidth()-bw*zoom)/2;
+
+    offsetY=
+        (viewportHeight()-bh*zoom)/2;
+
+    if(redraw){
+        render();
+    }
+}
+
+
+function resetView(){
+    fitBoard(true);
+}
+
+
+function zoomBy(f){
+
+    zoom=Math.max(
+        0.001,
+        Math.min(
+            100000,
+            zoom*f
+        )
+    );
+
+    render();
+}
+
+
+/* ============================================================
+   SIDE / LAYERS
+   ============================================================ */
+
+function setAll(value){
+
+    visible=
+        visible.map(
+            ()=>value
+        );
+
+    buildLayerList();
+    render();
+}
+
+
+function sideVisible(layerName,side){
+
+    const n=
+        String(layerName||"")
+        .toLowerCase()
+        .trim();
+
+    const common=
+        n==="board outline" ||
+        n==="drill" ||
+        n==="pth drill" ||
+        n==="npth drill";
+
+
+    if(side==="top"){
+
+        return common ||
+            (
+                n.includes("top") &&
+                !n.includes("bottom")
+            );
+    }
+
+
+    if(side==="bottom"){
+
+        return common ||
+            (
+                n.includes("bottom") &&
+                !n.includes("top")
+            );
+    }
+
+
+    return true;
+}
+
+
+function setSide(side){
+
+    if(!viewerData){
+        return;
+    }
+
+    currentSide=side;
+
+    visible=
+        viewerData.layers.map(
+            l=>sideVisible(
+                l.layer,
+                side
+            )
+        );
+
+    buildLayerList();
+    render();
+}
+
+
+function buildLayerList(){
+
+    layerList.innerHTML="";
+
+    (
+        viewerData?.layers || []
+    ).forEach(
+        (layer,i)=>{
+
+            const row=
+                document.createElement("label");
+
+            row.className="layer";
+
+
+            const cb=
+                document.createElement("input");
+
+            cb.type="checkbox";
+
+            cb.checked=
+                visible[i]!==false;
+
+            cb.addEventListener(
+                "change",
+                ()=>{
+                    visible[i]=cb.checked;
+                    render();
+                }
+            );
+
+
+            const sw=
+                document.createElement("span");
+
+            sw.className="swatch";
+
+            sw.style.background=
+                colorFor(layer.layer);
+
+
+            const name=
+                document.createElement("span");
+
+            name.className="layer-name";
+
+            name.title=
+                layer.filename ||
+                layer.layer ||
+                "";
+
+            name.textContent=
+                layer.layer ||
+                layer.filename ||
+                "Unknown";
+
+
+            row.append(
+                cb,
+                sw,
+                name
+            );
+
+            layerList.appendChild(row);
+        }
+    );
+}
+
+
+/* ============================================================
+   PRIMITIVE DRAWING
+   ============================================================ */
+
+function drawPrimitive(c,p,color){
+
+    if(!p){
+        return;
+    }
+
+    const clear=
+        isClearPolarity(p);
+
+
+    c.save();
+
+    c.globalCompositeOperation=
+        clear
+        ? "destination-out"
+        : "source-over";
+
+    c.fillStyle=color;
+    c.strokeStyle=color;
+
+    c.lineCap="round";
+    c.lineJoin="round";
+
+
+    /* LINE */
+
+    if(p.type==="line"){
+
+        if(!p.start || !p.end){
+            c.restore();
+            return;
+        }
+
+        const a=
+            worldToScreen(
+                p.start[0],
+                p.start[1]
+            );
+
+        const b=
+            worldToScreen(
+                p.end[0],
+                p.end[1]
+            );
+
+        c.beginPath();
+
+        c.lineWidth=
+            Math.max(
+                0.5,
+                mmToPx(
+                    Number(p.width)||0.05
+                )
+            );
+
+        c.moveTo(
+            a[0],
+            a[1]
+        );
+
+        c.lineTo(
+            b[0],
+            b[1]
+        );
+
+        c.stroke();
+
+        c.restore();
+        return;
+    }
+
+
+    /* POLYLINE */
+
+    if(p.type==="polyline"){
+
+        const pts=
+            Array.isArray(p.points)
+            ? p.points
+            : [];
+
+        if(pts.length<2){
+            c.restore();
+            return;
+        }
+
+        c.beginPath();
+
+        const first=
+            worldToScreen(
+                pts[0][0],
+                pts[0][1]
+            );
+
+        c.moveTo(
+            first[0],
+            first[1]
+        );
+
+
+        for(
+            let i=1;
+            i<pts.length;
+            i++
+        ){
+
+            const q=
+                worldToScreen(
+                    pts[i][0],
+                    pts[i][1]
+                );
+
+            c.lineTo(
+                q[0],
+                q[1]
+            );
+        }
+
+
+        c.lineWidth=
+            Math.max(
+                0.5,
+                mmToPx(
+                    Number(p.width)||0.05
+                )
+            );
+
+        c.stroke();
+
+        c.restore();
+        return;
+    }
+
+
+    /* CIRCLE / FLASH */
+
+    if(
+        p.type==="circle" ||
+        p.type==="flash"
+    ){
+
+        const center=
+            p.center ||
+            p.position;
+
+        if(!center){
+            c.restore();
+            return;
+        }
+
+
+        const r=
+            Math.max(
+                0,
+                mmToPx(
+                    (Number(p.diameter)||0)/2
+                )
+            );
+
+
+        if(r<=0){
+            c.restore();
+            return;
+        }
+
+
+        const q=
+            worldToScreen(
+                center[0],
+                center[1]
+            );
+
+
+        c.beginPath();
+
+        c.arc(
+            q[0],
+            q[1],
+            r,
+            0,
+            Math.PI*2
+        );
+
+        c.fill();
+
+
+        if(
+            !clear &&
+            Number(p.hole_diameter)>0
+        ){
+
+            c.globalCompositeOperation=
+                "destination-out";
+
+            c.beginPath();
+
+            c.arc(
+                q[0],
+                q[1],
+                mmToPx(
+                    Number(p.hole_diameter)/2
+                ),
+                0,
+                Math.PI*2
+            );
+
+            c.fill();
+        }
+
+
+        c.restore();
+        return;
+    }
+
+
+    /* DRILL */
+
+    if(p.type==="drill"){
+
+        const center=
+            p.center ||
+            p.position;
+
+        const dia=
+            Number(p.diameter)||0;
+
+
+        if(
+            !center ||
+            dia<=0
+        ){
+
+            c.restore();
+            return;
+        }
+
+
+        const q=
+            worldToScreen(
+                center[0],
+                center[1]
+            );
+
+        const r=
+            Math.max(
+                0.5,
+                mmToPx(dia/2)
+            );
+
+
+        c.globalCompositeOperation=
+            "source-over";
+
+        c.fillStyle=
+            PCB_COLORS.drill;
+
+        c.strokeStyle=
+            "#303530";
+
+        c.lineWidth=1;
+
+
+        c.beginPath();
+
+        c.arc(
+            q[0],
+            q[1],
+            r,
+            0,
+            Math.PI*2
+        );
+
+        c.fill();
+        c.stroke();
+
+        c.restore();
+        return;
+    }
+
+
+    /* RECTANGLE */
+
+    if(p.type==="rectangle"){
+
+        const [
+            x,
+            y
+        ]=
+            p.position || [0,0];
+
+        const w=
+            Number(p.width)||0;
+
+        const h=
+            Number(p.height)||0;
+
+        const a=
+            -(Number(p.rotation)||0)
+            *Math.PI/180;
+
+
+        c.translate(
+            ...worldToScreen(
+                x,
+                y
+            )
+        );
+
+        c.rotate(a);
+
+
+        c.beginPath();
+
+        c.rect(
+            -mmToPx(w/2),
+            -mmToPx(h/2),
+            mmToPx(w),
+            mmToPx(h)
+        );
+
+        c.fill();
+
+        c.restore();
+        return;
+    }
+
+
+    /* OBROUND */
+
+    if(p.type==="obround"){
+
+        drawObround(
+            c,
+            p,
+            color,
+            clear
+        );
+
+        c.restore();
+        return;
+    }
+
+
+    /* POLYGON */
+
+    if(p.type==="polygon"){
+
+        const pts=
+            Array.isArray(p.points)
+            ? p.points
+            : [];
+
+        if(pts.length<3){
+            c.restore();
+            return;
+        }
+
+
+        c.beginPath();
+
+
+        const q0=
+            worldToScreen(
+                pts[0][0],
+                pts[0][1]
+            );
+
+        c.moveTo(
+            q0[0],
+            q0[1]
+        );
+
+
+        for(
+            let i=1;
+            i<pts.length;
+            i++
+        ){
+
+            const q=
+                worldToScreen(
+                    pts[i][0],
+                    pts[i][1]
+                );
+
+            c.lineTo(
+                q[0],
+                q[1]
+            );
+        }
+
+
+        c.closePath();
+        c.fill();
+
+        c.restore();
+        return;
+    }
+
+
+    /* REGION */
+
+    if(p.type==="region"){
+
+        const paths=
+            Array.isArray(p.paths)
+            ? p.paths
+            : [];
+
+        if(!paths.length){
+            c.restore();
+            return;
+        }
+
+
+        c.beginPath();
+
+
+        for(const path of paths){
+
+            if(
+                !Array.isArray(path) ||
+                path.length<3
+            ){
+                continue;
+            }
+
+
+            const q0=
+                worldToScreen(
+                    path[0][0],
+                    path[0][1]
+                );
+
+            c.moveTo(
+                q0[0],
+                q0[1]
+            );
+
+
+            for(
+                let i=1;
+                i<path.length;
+                i++
+            ){
+
+                const q=
+                    worldToScreen(
+                        path[i][0],
+                        path[i][1]
+                    );
+
+                c.lineTo(
+                    q[0],
+                    q[1]
+                );
+            }
+
+
+            c.closePath();
+        }
+
+
+        c.fill("evenodd");
+
+        c.restore();
+        return;
+    }
+
+
+    c.restore();
+}
+
+
+/* ============================================================
+   OBROUND
+   ============================================================ */
+
+function drawObround(
+    c,
+    p,
+    color,
+    clear
+){
+
+    const [
+        cx,
+        cy
+    ]=
+        p.position || [0,0];
+
+    const w=
+        Math.abs(
+            Number(p.width)||0
+        );
+
+    const h=
+        Math.abs(
+            Number(p.height)||0
+        );
+
+    const rotation=
+        Number(p.rotation)||0;
+
+
+    if(
+        w<=0 ||
+        h<=0
+    ){
+        return;
+    }
+
+
+    const pts=[];
+    const steps=24;
+
+
+    if(w>=h){
+
+        const r=h/2;
+        const straight=(w-h)/2;
+
+
+        for(
+            let i=0;
+            i<=steps;
+            i++
+        ){
+
+            const t=i/steps;
+
+            const a=
+                -Math.PI/2+
+                Math.PI*t;
+
+            pts.push([
+                straight+
+                r*Math.cos(a),
+
+                r*Math.sin(a)
+            ]);
+        }
+
+
+        for(
+            let i=0;
+            i<=steps;
+            i++
+        ){
+
+            const t=i/steps;
+
+            const a=
+                Math.PI/2+
+                Math.PI*t;
+
+            pts.push([
+                -straight+
+                r*Math.cos(a),
+
+                r*Math.sin(a)
+            ]);
+        }
+
+    }else{
+
+        const r=w/2;
+        const straight=(h-w)/2;
+
+
+        for(
+            let i=0;
+            i<=steps;
+            i++
+        ){
+
+            const t=i/steps;
+
+            const a=
+                Math.PI*t;
+
+            pts.push([
+                r*Math.cos(a),
+
+                straight+
+                r*Math.sin(a)
+            ]);
+        }
+
+
+        for(
+            let i=0;
+            i<=steps;
+            i++
+        ){
+
+            const t=i/steps;
+
+            const a=
+                Math.PI+
+                Math.PI*t;
+
+            pts.push([
+                r*Math.cos(a),
+
+                -straight+
+                r*Math.sin(a)
+            ]);
+        }
+    }
+
+
+    const a=
+        rotation*Math.PI/180;
+
+    const ca=Math.cos(a);
+    const sa=Math.sin(a);
+
+
+    c.beginPath();
+
+
+    pts.forEach(
+        (pt,i)=>{
+
+            const x=
+                cx+
+                pt[0]*ca-
+                pt[1]*sa;
+
+            const y=
+                cy+
+                pt[0]*sa+
+                pt[1]*ca;
+
+
+            const q=
+                worldToScreen(
+                    x,
+                    y
+                );
+
+
+            if(i===0){
+
+                c.moveTo(
+                    q[0],
+                    q[1]
+                );
+
+            }else{
+
+                c.lineTo(
+                    q[0],
+                    q[1]
+                );
+            }
+        }
+    );
+
+
+    c.closePath();
+    c.fill();
+}
+
+
+/* ============================================================
+   LAYER HELPERS
+   ============================================================ */
+
+function layerNamed(name){
+
+    const n=
+        String(name||"")
+        .toLowerCase();
+
+    return (
+        viewerData?.layers || []
+    ).find(
+        l =>
+            String(l.layer||"")
+            .toLowerCase()===n
+    );
+}
+
+
+function drawLayerPrimitives(
+    c,
+    layer,
+    color
+){
+
+    if(!layer){
+        return;
+    }
+
+
+    for(
+        const p of (
+            layer.geometry?.primitives || []
+        )
+    ){
+
+        drawPrimitive(
+            c,
+            p,
+            color
+        );
+    }
+}
+
+
+/* ============================================================
+   BOARD OUTLINE
+   ============================================================ */
+
+function getOutlinePaths(){
+    const g=viewerData?.outline_geometry;
+    if(!g){
+        return [];
+    }
+    const out=[];
+    for(const p of (g.primitives || [])){
+        if(p.type==="line"){
+            out.push([p.start, p.end]);
+        }else if((p.type==="polyline" || p.type==="polygon") && Array.isArray(p.points) && p.points.length>=2){
+            out.push(p.points);
+        }else if(p.type==="region"){
+            for(const path of (p.paths || [])){
+                if(path.length>=3){
+                    out.push(path);
+                }
+            }
+        }else if(p.type==="circle" && (p.center || p.position)){
+            const center = p.center || p.position;
+            const radius = Number(p.radius) || (Number(p.diameter) / 2) || 0;
+            if(radius > 0){
+                const pts = [];
+                const numSteps = 64;
+                for(let i = 0; i <= numSteps; i++){
+                    const angle = (i / numSteps) * Math.PI * 2;
+                    pts.push([center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)]);
+                }
+                out.push(pts);
+            }
+        }else if(p.type==="arc" && p.center && p.start && p.end){
+            const cx = p.center[0], cy = p.center[1];
+            const sx = p.start[0], sy = p.start[1];
+            const ex = p.end[0], ey = p.end[1];
+            const r1 = Math.hypot(sx - cx, sy - cy);
+            const r2 = Math.hypot(ex - cx, ey - cy);
+            const r = (r1 + r2) / 2;
+            if(r > 1e-6){
+                let a1 = Math.atan2(sy - cy, sx - cx);
+                let a2 = Math.atan2(ey - cy, ex - cx);
+                const dirStr = String(p.direction || "").toLowerCase();
+                const cw = dirStr.includes("cw") && !dirStr.includes("ccw");
+                let sweep = cw ? (a1 - a2) : (a2 - a1);
+                while(sweep < 0) sweep += Math.PI * 2;
+                if(sweep < 1e-6) sweep = Math.PI * 2;
+                const steps = Math.max(4, Math.ceil(sweep / (Math.PI / 18)));
+                const pts = [];
+                for(let i = 0; i <= steps; i++){
+                    const t = i / steps;
+                    const angle = cw ? (a1 - sweep * t) : (a1 + sweep * t);
+                    pts.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
+                }
+                pts[0] = [sx, sy];
+                pts[pts.length - 1] = [ex, ey];
+                out.push(pts);
+            }
+        }
+    }
+    return out;
+}
+
+
+function outlineChain(){
+    const rawPaths = getOutlinePaths().filter(a => Array.isArray(a) && a.length >= 2);
+    if (!rawPaths.length) return null;
+
+    const eq = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 0.2;
+
+    function polyArea(pts) {
+        let area = 0;
+        for (let i = 0; i < pts.length; i++) {
+            const j = (i + 1) % pts.length;
+            area += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+        }
+        return Math.abs(area) / 2;
+    }
+
+    const closedLoops = [];
+    const segs = rawPaths.map(a => a.slice());
+
+    while (segs.length > 0) {
+        let chain = segs.shift();
+
+        if (eq(chain[0], chain[chain.length - 1])) {
+            closedLoops.push(chain);
+            continue;
+        }
+
+        let guard = 0;
+        while (guard++ < segs.length + 20) {
+            const end = chain[chain.length - 1];
+            let found = -1;
+            let rev = false;
+
+            for (let i = 0; i < segs.length; i++) {
+                if (eq(end, segs[i][0])) {
+                    found = i; rev = false; break;
+                }
+                if (eq(end, segs[i][segs[i].length - 1])) {
+                    found = i; rev = true; break;
+                }
+            }
+
+            if (found < 0) break;
+
+            let part = segs.splice(found, 1)[0];
+            if (rev) part = part.reverse();
+
+            chain.push(...part.slice(1));
+            if (eq(chain[0], chain[chain.length - 1])) {
+                break;
+            }
+        }
+
+        if (chain.length >= 3 && eq(chain[0], chain[chain.length - 1])) {
+            closedLoops.push(chain);
+        } else if (chain.length >= 3) {
+            const closedCopy = chain.slice();
+            closedCopy.push(chain[0]);
+            closedLoops.push(closedCopy);
+        }
+    }
+
+    if (!closedLoops.length) return null;
+
+    closedLoops.sort((a, b) => polyArea(b) - polyArea(a));
+    return closedLoops[0];
+}
+
+
+function traceOutlinePath(
+    c,
+    close=true
+){
+    const chain = outlineChain();
+    if (!chain || chain.length < 3) return false;
+
+    let xs = chain.map(p => p[0]);
+    let ys = chain.map(p => p[1]);
+    let minX = Math.min(...xs), maxX = Math.max(...xs);
+    let minY = Math.min(...ys), maxY = Math.max(...ys);
+    let cx = (minX + maxX) / 2.0;
+    let cy = (minY + maxY) / 2.0;
+    let radii = chain.map(p => Math.hypot(p[0] - cx, p[1] - cy));
+    let avgR = radii.reduce((a, b) => a + b, 0) / radii.length;
+    let maxDiff = Math.max(...radii.map(r => Math.abs(r - avgR)));
+
+    c.beginPath();
+
+    if (avgR > 2.0 && maxDiff < 0.10 * avgR) {
+        const centerScr = worldToScreen(cx, cy);
+        const rPx = mmToPx(avgR);
+        c.arc(centerScr[0], centerScr[1], rPx, 0, Math.PI * 2);
+        return true;
+    }
+
+    let q = worldToScreen(chain[0][0], chain[0][1]);
+    c.moveTo(q[0], q[1]);
+    for (let i = 1; i < chain.length; i++) {
+        q = worldToScreen(chain[i][0], chain[i][1]);
+        c.lineTo(q[0], q[1]);
+    }
+    if (close) {
+        c.closePath();
+    }
+    return true;
+}
+
+
+/* ============================================================
+   SOLDER MASK COMPOSITE
+
+   IMPORTANT:
+
+   1. Copper is first painted GOLD.
+   2. A SOLID GREEN solder-mask film is painted over it.
+   3. Mask artwork is treated as OPENINGS.
+   4. Those openings are removed from the mask.
+   5. GOLD copper is therefore visible only through openings.
+
+   Result:
+
+       TRACE UNDER MASK  = GREEN
+       EXPOSED PAD       = GOLD
+   ============================================================ */
+
+function drawMaskComposite(
+    c,
+    layer,
+    copper
+){
+
+    if(!layer){
+        return;
+    }
+
+    const w=viewportWidth();
+    const h=viewportHeight();
+
+    /*
+     * We render the PCB in three distinct materials:
+     *
+     * 1. Copper under mask = lighter green
+     * 2. Solder mask = dark green
+     * 3. Mask openings = gold copper
+     *
+     * The mask is therefore NOT made transparent.
+     * Instead, mask is removed over copper and over
+     * solder-mask openings.
+     */
+
+    const film=document.createElement("canvas");
+    film.width=Math.max(1,Math.round(w*dpr));
+    film.height=Math.max(1,Math.round(h*dpr));
+
+    const f=film.getContext("2d");
+    f.setTransform(dpr,0,0,dpr,0,0);
+
+    /* ------------------------------------------------------------
+       1. SOLID SOLDER MASK
+       ------------------------------------------------------------ */
+
+    f.fillStyle=PCB_COLORS.solderMask;
+    f.fillRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* ------------------------------------------------------------
+       2. BUILD MASK OPENING STENCIL
+       ------------------------------------------------------------ */
+
+    const openings=document.createElement("canvas");
+    openings.width=film.width;
+    openings.height=film.height;
+
+    const o=openings.getContext("2d");
+    o.setTransform(dpr,0,0,dpr,0,0);
+
+    for(const p0 of (layer.geometry?.primitives || [])){
+
+        /*
+         * Legacy/EAGLE solder-mask artwork represents
+         * the areas where solder mask is OPEN.
+         */
+        const p=Object.assign(
+            {},
+            p0,
+            {polarity:"dark"}
+        );
+
+        drawPrimitive(
+            o,
+            p,
+            "#ffffff"
+        );
+    }
+
+
+    /* ------------------------------------------------------------
+       3. BUILD COPPER STENCIL
+       ------------------------------------------------------------ */
+
+    const copperStencil=document.createElement("canvas");
+    copperStencil.width=film.width;
+    copperStencil.height=film.height;
+
+    const cs=copperStencil.getContext("2d");
+    cs.setTransform(dpr,0,0,dpr,0,0);
+
+    /*
+     * Draw the real copper polarity into the stencil.
+     * Dark copper adds white.
+     * Clear copper removes previously drawn copper.
+     */
+    for(const p of (copper?.geometry?.primitives || [])){
+        drawPrimitive(
+            cs,
+            p,
+            "#ffffff"
+        );
+    }
+
+
+    /* ------------------------------------------------------------
+       4. REMOVE MASK OVER COPPER
+       ------------------------------------------------------------ */
+
+    f.globalCompositeOperation="destination-out";
+
+    f.drawImage(
+        copperStencil,
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* ------------------------------------------------------------
+       5. REMOVE MASK AT SOLDER-MASK OPENINGS
+       ------------------------------------------------------------ */
+
+    f.drawImage(
+        openings,
+        0,
+        0,
+        w,
+        h
+    );
+
+    f.globalCompositeOperation="source-over";
+
+
+    /* ------------------------------------------------------------
+       6. DRAW THE GREEN MASK
+       ------------------------------------------------------------ */
+
+    c.drawImage(
+        film,
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* ------------------------------------------------------------
+       7. RESTORE GOLD COPPER ONLY INSIDE MASK OPENINGS
+       ------------------------------------------------------------ */
+
+    const exposed=document.createElement("canvas");
+    exposed.width=film.width;
+    exposed.height=film.height;
+
+    const e=exposed.getContext("2d");
+    e.setTransform(dpr,0,0,dpr,0,0);
+
+    for(const p of (copper?.geometry?.primitives || [])){
+        drawPrimitive(
+            e,
+            p,
+            PCB_COLORS.copperExposed
+        );
+    }
+
+    e.globalCompositeOperation="destination-in";
+
+    e.drawImage(
+        openings,
+        0,
+        0,
+        w,
+        h
+    );
+
+    e.globalCompositeOperation="source-over";
+
+    c.drawImage(
+        exposed,
+        0,
+        0,
+        w,
+        h
+    );
+}
+
+
+/* ============================================================
+   DRILLS
+   ============================================================ */
+
+function drawCompositeDrills(c){
+
+    for(
+        const layer of (
+            viewerData?.layers || []
+        )
+    ){
+
+        const n=
+            String(layer.layer||"")
+            .toLowerCase();
+
+
+        if(
+            !(
+                n==="drill" ||
+                n==="pth drill" ||
+                n==="npth drill" ||
+                layer.category==="drill"
+            )
+        ){
+            continue;
+        }
+
+
+        for(
+            const p of (
+                layer.geometry?.primitives || []
+            )
+        ){
+
+            if(p.type!=="drill"){
+                continue;
+            }
+
+
+            const center=
+                p.center ||
+                p.position;
+
+            const dia=
+                Number(p.diameter)||0;
+
+
+            if(
+                !center ||
+                dia<=0
+            ){
+                continue;
+            }
+
+
+            const q=
+                worldToScreen(
+                    center[0],
+                    center[1]
+                );
+
+
+            const r=
+                Math.max(
+                    0.6,
+                    mmToPx(dia/2)
+                );
+
+
+            c.save();
+
+
+            c.globalCompositeOperation=
+                "source-over";
+
+
+            c.fillStyle=
+                PCB_COLORS.drill;
+
+
+            c.strokeStyle=
+                "#303530";
+
+
+            c.lineWidth=
+                Math.max(
+                    0.6,
+                    mmToPx(0.08)
+                );
+
+
+            c.beginPath();
+
+
+            c.arc(
+                q[0],
+                q[1],
+                r,
+                0,
+                Math.PI*2
+            );
+
+
+            c.fill();
+            c.stroke();
+
+
+            c.restore();
+        }
+    }
+}
+
+
+/* ============================================================
+   PCB COMPOSITE
+   ============================================================ */
+
+function renderComposite(side){
+
+    if(!viewerData){
+        return;
+    }
+
+    currentSide=side;
+
+
+    const w=
+        viewportWidth();
+
+    const h=
+        viewportHeight();
+
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+
+    ctx.clearRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* BACKGROUND */
+
+    ctx.fillStyle=
+        PCB_COLORS.background;
+
+    ctx.fillRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* Mirror the complete bottom-side PCB view. */
+    ctx.save();
+    applyBottomMirror(ctx,w);
+
+
+    /* ========================================================
+       CLIP TO ACTUAL BOARD OUTLINE
+       ======================================================== */
+
+    ctx.save();
+
+
+    if(
+        !traceOutlinePath(
+            ctx,
+            true
+        )
+    ){
+
+        const a=
+            worldToScreen(
+                minX,
+                maxY
+            );
+
+        ctx.beginPath();
+
+        ctx.rect(
+            a[0],
+            a[1],
+            mmToPx(
+                maxX-minX
+            ),
+            mmToPx(
+                maxY-minY
+            )
+        );
+    }
+
+
+    ctx.clip();
+
+
+    /* ========================================================
+       PCB BASE / SUBSTRATE
+       ======================================================== */
+
+    ctx.fillStyle=
+        PCB_COLORS.board;
+
+    ctx.fillRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    /* ========================================================
+       SELECT LAYERS
+       ======================================================== */
+
+    const copper=
+        layerNamed(
+            side==="top"
+            ? "top copper"
+            : "bottom copper"
+        );
+
+
+    const mask=
+        layerNamed(
+            side==="top"
+            ? "top solder mask"
+            : "bottom solder mask"
+        );
+
+
+    const silk=
+        layerNamed(
+            side==="top"
+            ? "top silkscreen"
+            : "bottom silkscreen"
+        );
+
+
+    /* ========================================================
+       1. COPPER
+
+       Gold initially.
+
+       The solder mask below will cover it.
+       ======================================================== */
+
+    drawLayerPrimitives(
+		ctx,
+		copper,
+		PCB_COLORS.copperCovered
+	);
+
+
+    /* ========================================================
+       2. SOLDER MASK
+
+       SOLID green film.
+
+       Openings reveal gold copper.
+       ======================================================== */
+
+    drawMaskComposite(
+        ctx,
+        mask,
+        copper
+    );
+
+
+    /* ========================================================
+       3. SILKSCREEN
+       ======================================================== */
+
+    drawLayerPrimitives(
+        ctx,
+        silk,
+        PCB_COLORS.silkscreen
+    );
+
+
+    /* ========================================================
+       4. DRILLS
+       ======================================================== */
+	ctx.restore();
+
+
+    /* ========================================================
+       BOARD OUTLINE
+       ======================================================== */
+
+    ctx.save();
+
+
+    if(
+        traceOutlinePath(
+            ctx,
+            true
+        )
+    ){
+
+        ctx.strokeStyle=
+            PCB_COLORS.outline;
+
+        ctx.lineWidth=1.2;
+
+        ctx.stroke();
+
+    }else{
+
+        ctx.strokeStyle=
+            PCB_COLORS.outline;
+
+        ctx.lineWidth=1.2;
+
+        ctx.strokeRect(
+            ...worldToScreen(
+                minX,
+                maxY
+            ),
+            mmToPx(
+                maxX-minX
+            ),
+            mmToPx(
+                maxY-minY
+            )
+        );
+    }
+
+
+    ctx.restore();
+	
+	/* DRILLS MUST BE ABSOLUTELY LAST */
+	drawCompositeDrills(ctx);
+
+
+    /* End bottom-side mirror transform. */
+    ctx.restore();
+
+
+    /* Synchronize layer checkboxes */
+
+    visible=
+        viewerData.layers.map(
+            l=>sideVisible(
+                l.layer,
+                side
+            )
+        );
+
+    buildLayerList();
+}
+
+
+/* ============================================================
+   RAW VECTOR VIEW
+   ============================================================ */
+
+function render(){
+
+    const w=
+        viewportWidth();
+
+    const h=
+        viewportHeight();
+
+
+    ctx.setTransform(
+        dpr,
+        0,
+        0,
+        dpr,
+        0,
+        0
+    );
+
+
+    ctx.clearRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    ctx.fillStyle=
+        PCB_COLORS.background;
+
+    ctx.fillRect(
+        0,
+        0,
+        w,
+        h
+    );
+
+
+    if(!viewerData){
+        return;
+    }
+
+
+    /* Mirror the complete bottom-side raw vector view. */
+    ctx.save();
+    applyBottomMirror(ctx,w);
+
+
+    /*
+     * Every layer gets its own transparent canvas.
+     * This prevents destination-out from one layer
+     * erasing other layers.
+     */
+
+    /* Draw all NON-DRILL layers first */
+for(let i=0;i<viewerData.layers.length;i++){
+
+    if(visible[i]===false) continue;
+
+    const layer=viewerData.layers[i];
+
+    const n=String(layer.layer||"").toLowerCase();
+
+    const isDrill =
+        n==="drill" ||
+        n==="pth drill" ||
+        n==="npth drill" ||
+        layer.category==="drill";
+
+    if(isDrill) continue;
+
+    const lc=document.createElement("canvas");
+
+    lc.width=Math.max(1,Math.round(w*dpr));
+    lc.height=Math.max(1,Math.round(h*dpr));
+
+    const lctx=lc.getContext("2d");
+
+    lctx.setTransform(dpr,0,0,dpr,0,0);
+
+    const color=colorFor(layer.layer);
+
+    for(const p of (layer.geometry?.primitives||[])){
+        drawPrimitive(lctx,p,color);
+    }
+
+    ctx.drawImage(lc,0,0,w,h);
+}
+
+
+/* ============================================================
+   DRILLS LAST — ALWAYS ON TOP OF EVERYTHING
+   ============================================================ */
+
+for(const layer of (viewerData.layers||[])){
+
+    const n=String(layer.layer||"").toLowerCase();
+
+    const isDrill =
+        n==="drill" ||
+        n==="pth drill" ||
+        n==="npth drill" ||
+        layer.category==="drill";
+
+    if(!isDrill || visible[viewerData.layers.indexOf(layer)]===false){
+        continue;
+    }
+
+    for(const p of (layer.geometry?.primitives||[])){
+
+        if(p.type!=="drill") continue;
+
+        const center=p.center || p.position;
+        const dia=Number(p.diameter)||0;
+
+        if(!center || dia<=0) continue;
+
+        const q=worldToScreen(
+            center[0],
+            center[1]
+        );
+
+        const r=Math.max(
+            0.6,
+            mmToPx(dia/2)
+        );
+
+        ctx.save();
+
+        ctx.globalCompositeOperation="source-over";
+
+        /* Dark drill hole */
+        ctx.fillStyle="#111111";
+
+        /* Light rim so the hole remains visible */
+        ctx.strokeStyle="#ffffff";
+
+        ctx.lineWidth=Math.max(
+            0.8,
+            mmToPx(0.08)
+        );
+
+        ctx.beginPath();
+
+        ctx.arc(
+            q[0],
+            q[1],
+            r,
+            0,
+            Math.PI*2
+        );
+
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.restore();
+    }
+}
+
+
+    /* Actual board outline */
+
+    ctx.save();
+
+
+    ctx.strokeStyle=
+        PCB_COLORS.outline;
+
+    ctx.lineWidth=1.5;
+
+
+    if(
+        traceOutlinePath(
+            ctx,
+            true
+        )
+    ){
+
+        ctx.stroke();
+
+    }else{
+
+        ctx.strokeRect(
+            ...worldToScreen(
+                minX,
+                maxY
+            ),
+            mmToPx(
+                maxX-minX
+            ),
+            mmToPx(
+                maxY-minY
+            )
+        );
+    }
+
+
+    ctx.restore();
+
+    /* End bottom-side mirror transform. */
+    ctx.restore();
+}
+
+
+/* ============================================================
+   LOAD VIEWER DATA
+   ============================================================ */
+
+async function loadViewer(){
+
+    const projectId=
+        new URLSearchParams(
+            location.search
+        ).get(
+            "project_id"
+        );
+
+
+    if(!projectId){
+
+        statusEl.textContent=
+            "Missing project_id";
+
+        statusEl.className=
+            "error";
+
+        return;
+    }
+
+
+    try{
+
+        const response=
+            await fetch(
+                `/api/project/${encodeURIComponent(projectId)}/viewer`,
+                {
+                    cache:"no-store"
+                }
+            );
+
+
+        if(!response.ok){
+
+            throw new Error(
+                `Viewer API failed (${response.status})`
+            );
+        }
+
+
+        const data=
+            await response.json();
+
+
+        if(
+            !data ||
+            !data.viewer
+        ){
+
+            throw new Error(
+                "Invalid viewer response"
+            );
+        }
+
+
+        viewerData=
+            data.viewer;
+
+
+        visible=
+            (viewerData.layers || [])
+            .map(
+                ()=>true
+            );
+
+
+        calculateBounds();
+
+        buildLayerList();
+
+        resizeCanvas();
+
+
+        const bb=
+            viewerData.board_bounds;
+
+
+        const dims=
+            bb
+            ? `${bb.width_mm.toFixed(3)} × ${bb.height_mm.toFixed(3)} mm`
+            : "board size unavailable";
+
+
+        statusEl.textContent=
+            `${viewerData.layers.length} layers · ${dims} · ${viewerData.geometry_version||"legacy"}`;
+
+
+        /* Default PCB top composite */
+
+        renderComposite("top");
+
+
+    }catch(err){
+
+        console.error(err);
+
+        statusEl.textContent=
+            err.message ||
+            "Viewer error";
+
+        statusEl.className=
+            "error";
+    }
+}
+
+
+/* ============================================================
+   MOUSE ZOOM
+   ============================================================ */
+
+canvas.addEventListener(
+    "wheel",
+    e=>{
+
+        e.preventDefault();
+
+
+        if(!viewerData){
+            return;
+        }
+
+
+        const rect=
+            canvas.getBoundingClientRect();
+
+
+        const mx=
+            e.clientX-
+            rect.left;
+
+
+        const my=
+            e.clientY-
+            rect.top;
+
+
+        const before=
+            screenToWorld(
+                mx,
+                my
+            );
+
+
+        const factor=
+            e.deltaY<0
+            ? 1.15
+            : 1/1.15;
+
+
+        zoom=
+            Math.max(
+                0.001,
+                Math.min(
+                    100000,
+                    zoom*factor
+                )
+            );
+
+
+        const after=
+            worldToScreen(
+                before[0],
+                before[1]
+            );
+
+
+        offsetX+=
+            mx-after[0];
+
+        offsetY+=
+            my-after[1];
+
+
+        render();
+    },
+    {
+        passive:false
+    }
+);
+
+
+/* ============================================================
+   PAN
+   ============================================================ */
+
+canvas.addEventListener(
+    "mousedown",
+    e=>{
+
+        dragging=true;
+
+        dragStartX=
+            e.clientX;
+
+        dragStartY=
+            e.clientY;
+
+        oldOffsetX=
+            offsetX;
+
+        oldOffsetY=
+            offsetY;
+    }
+);
+
+
+window.addEventListener(
+    "mousemove",
+    e=>{
+
+        if(!dragging){
+            return;
+        }
+
+
+        offsetX=
+            oldOffsetX+
+            (
+                e.clientX-
+                dragStartX
+            );
+
+
+        offsetY=
+            oldOffsetY+
+            (
+                e.clientY-
+                dragStartY
+            );
+
+
+        render();
+    }
+);
+
+
+window.addEventListener(
+    "mouseup",
+    ()=>{
+        dragging=false;
+    }
+);
+
+
+/* ============================================================
+   DOUBLE CLICK FIT
+   ============================================================ */
+
+canvas.addEventListener(
+    "dblclick",
+    ()=>{
+        fitBoard(true);
+    }
+);
+
+
+/* ============================================================
+   COORDINATES
+   ============================================================ */
+
+canvas.addEventListener(
+    "mousemove",
+    e=>{
+
+        if(!viewerData){
+            return;
+        }
+
+
+        const rect=
+            canvas.getBoundingClientRect();
+
+
+        const [
+            x,
+            y
+        ]=
+            screenToWorld(
+                e.clientX-
+                rect.left,
+
+                e.clientY-
+                rect.top
+            );
+
+
+        coordsEl.textContent=
+            `X: ${x.toFixed(3)} · Y: ${y.toFixed(3)} mm`;
+    }
+);
+
+
+/* ============================================================
+   RESIZE
+   ============================================================ */
+
+window.addEventListener(
+    "resize",
+    resizeCanvas
+);
+
+
+/* ============================================================
+   START
+   ============================================================ */
+
+loadViewer();
+
+</script>
+
+</body>
+</html>
