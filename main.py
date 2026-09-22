@@ -50,6 +50,13 @@ app = FastAPI(
 )
 
 @app.get("/")
+def home():
+    viewer_file = Path(__file__).resolve().parent / "gerber_viewer.html"
+    if viewer_file.exists():
+        return FileResponse(str(viewer_file), media_type="text/html")
+    return health_check()
+
+
 @app.get("/health")
 @app.get("/api/health")
 def health_check():
