@@ -49,6 +49,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
+@app.get("/")
+@app.get("/health")
+@app.get("/api/health")
+def health_check():
+    return {
+        "status": "healthy",
+        "service": "PCB Gerber DFM Analyzer",
+        "version": "1.0.0",
+        "instance": os.getenv("RENDER_INSTANCE_ID", os.getenv("HOSTNAME", "localhost")),
+        "uptime_status": "ok",
+        "renderer_available": generate_pcb_previews is not None,
+    }
+
+
 @app.get("/gerber_viewer.html")
 def gerber_viewer_page():
     viewer_file = Path(__file__).resolve().parent / "gerber_viewer.html"
@@ -269,6 +283,42 @@ def extract_archive(
                         )
 
         return
+
+    if extension == ".rar":
+        try:
+            rarfile = __import__("rarfile")
+            with rarfile.RarFile(archive_path, "r") as rf:
+                for member in rf.namelist():
+                    if not member.endswith("/"):
+                        target_path = destination / Path(member).name
+                        with rf.open(member) as source, open(target_path, "wb") as target:
+                            shutil.copyfileobj(source, target)
+                return
+        except Exception:
+            pass
+
+        executables = [
+            r"C:\Program Files\7-Zip\7z.exe",
+            r"C:\Program Files (x86)\7-Zip\7z.exe",
+            r"C:\Program Files\WinRAR\UnRAR.exe",
+            r"C:\Program Files (x86)\WinRAR\UnRAR.exe",
+            r"C:\Program Files\WinRAR\WinRAR.exe",
+            "7z",
+            "unrar"
+        ]
+
+        for exe in executables:
+            if shutil.which(exe) or Path(exe).exists():
+                try:
+                    if "7z" in str(exe).lower():
+                        cmd = [exe, "e", "-y", f"-o{destination}", str(archive_path)]
+                    else:
+                        cmd = [exe, "e", "-y", str(archive_path), f"-o+{destination}"]
+                    res = subprocess.run(cmd, capture_output=True, text=True)
+                    if res.returncode == 0:
+                        return
+                except Exception:
+                    pass
 
     if extension in {".tar", ".gz", ".tgz"}:
 
@@ -4918,6 +4968,44 @@ async def analyze_pcb(
                 "pcb_3d_preview.png"
             )
 
+    preview_front = (
+        f"/projects/{project_id}/renders/pcb_top_2d.png"
+        if (render_dir / "pcb_top_2d.png").exists()
+        else (
+            preview_2d
+            or (
+                f"/projects/{project_id}/renders/pcb_2d_preview.png"
+                if (render_dir / "pcb_2d_preview.png").exists()
+                else None
+            )
+        )
+    )
+
+    preview_back = (
+        f"/projects/{project_id}/renders/pcb_bottom_2d.png"
+        if (render_dir / "pcb_bottom_2d.png").exists()
+        else None
+    )
+
+    preview_front_3d = (
+        f"/projects/{project_id}/renders/pcb_top_3d.png"
+        if (render_dir / "pcb_top_3d.png").exists()
+        else (
+            preview_3d
+            or (
+                f"/projects/{project_id}/renders/pcb_3d_preview.png"
+                if (render_dir / "pcb_3d_preview.png").exists()
+                else None
+            )
+        )
+    )
+
+    preview_back_3d = (
+        f"/projects/{project_id}/renders/pcb_bottom_3d.png"
+        if (render_dir / "pcb_bottom_3d.png").exists()
+        else None
+    )
+
     # --------------------------------------------------------
     # PCB SUMMARY
     # --------------------------------------------------------
@@ -5107,7 +5195,7 @@ async def analyze_pcb(
             ),
 
         "layer_count":
-            len(project_files),
+            max(2, pcb_summary.get("copper_layers", 2)),
 
         "drill_hits":
             drill_analysis.get(
@@ -5141,6 +5229,18 @@ async def analyze_pcb(
 
         "preview_3d":
             preview_3d,
+
+        "preview_front":
+            preview_front,
+
+        "preview_back":
+            preview_back,
+
+        "preview_front_3d":
+            preview_front_3d,
+
+        "preview_back_3d":
+            preview_back_3d,
 
         "total_files":
             len(project_files),

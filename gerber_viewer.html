@@ -1523,6 +1523,7 @@ function traceOutlinePath(
     let ys = chain.map(p => p[1]);
     let minX = Math.min(...xs), maxX = Math.max(...xs);
     let minY = Math.min(...ys), maxY = Math.max(...ys);
+    let bw = maxX - minX, bh = maxY - minY;
     let cx = (minX + maxX) / 2.0;
     let cy = (minY + maxY) / 2.0;
     let radii = chain.map(p => Math.hypot(p[0] - cx, p[1] - cy));
@@ -1531,7 +1532,7 @@ function traceOutlinePath(
 
     c.beginPath();
 
-    if (avgR > 2.0 && maxDiff < 0.10 * avgR) {
+    if (bw > 0 && bh > 0 && Math.abs(bw - bh) / Math.max(bw, bh) < 0.05 && avgR > 2.0 && maxDiff < 0.10 * avgR) {
         const centerScr = worldToScreen(cx, cy);
         const rPx = mmToPx(avgR);
         c.arc(centerScr[0], centerScr[1], rPx, 0, Math.PI * 2);

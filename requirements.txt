@@ -3,3 +3,5 @@ uvicorn>=0.22.0
 python-multipart>=0.0.6
 pcb-tools>=0.1.6
 Pillow>=9.0.0
+rarfile>=4.0
+

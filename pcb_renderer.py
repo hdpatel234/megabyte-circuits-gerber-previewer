@@ -42,7 +42,10 @@ def _read_text(path):
 def _safe_read(path):
     """Read Gerber without allowing one bad layer to stop all previews."""
     try:
-        return gerber.read(str(path))
+        g = gerber.read(str(path))
+        if g and str(getattr(g, "units", "metric")).lower() == "inch":
+            g.to_metric()
+        return g
     except Exception as e:
         print(f"Gerber read error: {path}: {e}")
         return None
@@ -897,22 +900,23 @@ def _get_board_outline_shape(extracted_path, project_files, bounds, scale, paddi
             visit(prim)
 
     if circles:
-        # Pick the circle closest to the board dimensions
+        # Pick the circle closest to the board dimensions (only if width ~ height)
         b_w = bounds.get("max_x", 0) - bounds.get("min_x", 0)
         b_h = bounds.get("max_y", 0) - bounds.get("min_y", 0)
-        exp_r = max(b_w, b_h) / 2.0
-        for c in circles:
-            if exp_r > 0 and abs(c["radius"] - exp_r) / exp_r < 0.2:
-                cx, cy = c["center"]
-                r = c["radius"]
-                cx_px, cy_px = mm_to_pixel(cx, cy, bounds, scale, padding)
-                r_px = int(round(r * scale))
-                return {
-                    "type": "circle",
-                    "center_px": (cx_px, cy_px),
-                    "radius_px": r_px,
-                    "bbox_px": [(cx_px - r_px, cy_px - r_px), (cx_px + r_px, cy_px + r_px)],
-                }
+        if b_w > 0 and b_h > 0 and abs(b_w - b_h) / max(b_w, b_h) < 0.05:
+            exp_r = max(b_w, b_h) / 2.0
+            for c in circles:
+                if exp_r > 0 and abs(c["radius"] - exp_r) / exp_r < 0.2:
+                    cx, cy = c["center"]
+                    r = c["radius"]
+                    cx_px, cy_px = mm_to_pixel(cx, cy, bounds, scale, padding)
+                    r_px = int(round(r * scale))
+                    return {
+                        "type": "circle",
+                        "center_px": (cx_px, cy_px),
+                        "radius_px": r_px,
+                        "bbox_px": [(cx_px - r_px, cy_px - r_px), (cx_px + r_px, cy_px + r_px)],
+                    }
 
     if segments:
         def poly_area(pts):
@@ -963,19 +967,22 @@ def _get_board_outline_shape(extracted_path, project_files, bounds, scale, paddi
             if len(best_pts) >= 8:
                 xs = [p[0] for p in best_pts]
                 ys = [p[1] for p in best_pts]
-                cx = (min(xs) + max(xs)) / 2.0
-                cy = (min(ys) + max(ys)) / 2.0
-                radii = [math.hypot(p[0] - cx, p[1] - cy) for p in best_pts]
-                avg_r = sum(radii) / len(radii)
-                if avg_r > 2.0 and max(abs(r - avg_r) for r in radii) < 0.10 * avg_r:
-                    cx_px, cy_px = mm_to_pixel(cx, cy, bounds, scale, padding)
-                    r_px = int(round(avg_r * scale))
-                    return {
-                        "type": "circle",
-                        "center_px": (cx_px, cy_px),
-                        "radius_px": r_px,
-                        "bbox_px": [(cx_px - r_px, cy_px - r_px), (cx_px + r_px, cy_px + r_px)],
-                    }
+                bw = max(xs) - min(xs)
+                bh = max(ys) - min(ys)
+                if bw > 0 and bh > 0 and abs(bw - bh) / max(bw, bh) < 0.05:
+                    cx = (min(xs) + max(xs)) / 2.0
+                    cy = (min(ys) + max(ys)) / 2.0
+                    radii = [math.hypot(p[0] - cx, p[1] - cy) for p in best_pts]
+                    avg_r = sum(radii) / len(radii)
+                    if avg_r > 2.0 and max(abs(r - avg_r) for r in radii) < 0.10 * avg_r:
+                        cx_px, cy_px = mm_to_pixel(cx, cy, bounds, scale, padding)
+                        r_px = int(round(avg_r * scale))
+                        return {
+                            "type": "circle",
+                            "center_px": (cx_px, cy_px),
+                            "radius_px": r_px,
+                            "bbox_px": [(cx_px - r_px, cy_px - r_px), (cx_px + r_px, cy_px + r_px)],
+                        }
 
             pixel_pts = [mm_to_pixel(x, y, bounds, scale, padding) for x, y in best_pts]
             return {
@@ -1316,7 +1323,7 @@ def _render_2d_top(
         shape=shape,
     )
 
-    # Top copper ONLY.
+    # Top copper (under soldermask)
     _draw_named_layers(
         draw,
         extracted_path,
@@ -1326,9 +1333,23 @@ def _render_2d_top(
         scale,
         padding,
         {
-            "Top Copper": (196, 118, 43),
+            "Top Copper": (35, 128, 76),
         },
         copper_layers={"Top Copper"},
+    )
+
+    # Top solder mask / Gold pads
+    _draw_named_layers(
+        draw,
+        extracted_path,
+        project_files,
+        ["Top Solder Mask"],
+        bounds,
+        scale,
+        padding,
+        {
+            "Top Solder Mask": (208, 183, 125),
+        },
     )
 
     # Top silkscreen ONLY.
@@ -1341,7 +1362,7 @@ def _render_2d_top(
         scale,
         padding,
         {
-            "Top Silkscreen": (242, 242, 238),
+            "Top Silkscreen": (245, 245, 240),
         },
     )
 
@@ -1369,6 +1390,7 @@ def _render_2d_top(
         shape=shape,
     )
 
+    res_image = board_surface
     if shape and shape.get("type") in ("circle", "polygon"):
         mask = Image.new("L", (width, height), 0)
         mask_draw = ImageDraw.Draw(mask)
@@ -1378,9 +1400,17 @@ def _render_2d_top(
             mask_draw.polygon(shape["points_px"], fill=255)
         canvas = Image.new("RGB", (width, height), (244, 245, 244))
         canvas.paste(board_surface, (0, 0), mask)
-        return canvas
+        res_image = canvas
 
-    return board_surface
+    x1 = min(board_rect[0][0], board_rect[1][0])
+    x2 = max(board_rect[0][0], board_rect[1][0])
+    y1 = min(board_rect[0][1], board_rect[1][1])
+    y2 = max(board_rect[0][1], board_rect[1][1])
+
+    if x2 > x1 + 10 and y2 > y1 + 10:
+        res_image = res_image.crop((x1, y1, x2, y2))
+
+    return res_image
 
 
 # ============================================================
@@ -1428,7 +1458,7 @@ def _render_2d_bottom(
         shape=shape,
     )
 
-    # Bottom copper ONLY.
+    # Bottom copper (under soldermask)
     _draw_named_layers(
         draw,
         extracted_path,
@@ -1438,9 +1468,23 @@ def _render_2d_bottom(
         scale,
         padding,
         {
-            "Bottom Copper": (184, 103, 38),
+            "Bottom Copper": (35, 128, 76),
         },
         copper_layers={"Bottom Copper"},
+    )
+
+    # Bottom solder mask / Gold pads
+    _draw_named_layers(
+        draw,
+        extracted_path,
+        project_files,
+        ["Bottom Solder Mask"],
+        bounds,
+        scale,
+        padding,
+        {
+            "Bottom Solder Mask": (208, 183, 125),
+        },
     )
 
     # Bottom silkscreen ONLY.
@@ -1453,7 +1497,7 @@ def _render_2d_bottom(
         scale,
         padding,
         {
-            "Bottom Silkscreen": (232, 232, 228),
+            "Bottom Silkscreen": (245, 245, 240),
         },
     )
 
@@ -1481,6 +1525,10 @@ def _render_2d_bottom(
         shape=shape,
     )
 
+    # Flip bottom side horizontally to match real PCB back view
+    board_surface = board_surface.transpose(Image.FLIP_LEFT_RIGHT)
+
+    res_image = board_surface
     if shape and shape.get("type") in ("circle", "polygon"):
         mask = Image.new("L", (width, height), 0)
         mask_draw = ImageDraw.Draw(mask)
@@ -1490,9 +1538,17 @@ def _render_2d_bottom(
             mask_draw.polygon(shape["points_px"], fill=255)
         canvas = Image.new("RGB", (width, height), (244, 245, 244))
         canvas.paste(board_surface, (0, 0), mask)
-        return canvas
+        res_image = canvas
 
-    return board_surface
+    x1 = min(board_rect[0][0], board_rect[1][0])
+    x2 = max(board_rect[0][0], board_rect[1][0])
+    y1 = min(board_rect[0][1], board_rect[1][1])
+    y2 = max(board_rect[0][1], board_rect[1][1])
+
+    if x2 > x1 + 10 and y2 > y1 + 10:
+        res_image = res_image.crop((x1, y1, x2, y2))
+
+    return res_image
 
 
 # ============================================================
@@ -1692,7 +1748,7 @@ def generate_pcb_previews(
 
     # High enough resolution for normal DFM viewing.
     scale = 12
-    padding = 50
+    padding = 4
 
     image_width = max(
         500,
