@@ -9,6 +9,7 @@ import json
 import shutil
 import zipfile
 import tarfile
+import subprocess
 import math
 import gerber
 import gerber_patch
@@ -51,9 +52,9 @@ app = FastAPI(
 
 @app.get("/")
 def home():
-    viewer_file = Path(__file__).resolve().parent / "gerber_viewer.html"
-    if viewer_file.exists():
-        return FileResponse(str(viewer_file), media_type="text/html")
+    dfm_file = Path(__file__).resolve().parent / "dfm.html"
+    if dfm_file.exists():
+        return FileResponse(str(dfm_file), media_type="text/html")
     return health_check()
 
 
