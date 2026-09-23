@@ -27,7 +27,7 @@ except Exception as e:
     generate_pcb_previews = None
     PCB_RENDERER_IMPORT_ERROR = str(e)
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -50,7 +50,19 @@ app = FastAPI(
     version="1.0.0"
 )
 
-@app.get("/")
+def generate_placeholder_image(text: str = "Preview Unavailable", width: int = 400, height: int = 300) -> bytes:
+    img = Image.new("RGBA", (width, height), (30, 41, 59, 255))
+    draw = ImageDraw.Draw(img)
+    draw.rectangle([10, 10, width - 10, height - 10], outline=(71, 85, 105, 255), width=2)
+    text_x = max(15, (width - len(text) * 8) // 2)
+    text_y = height // 2 - 7
+    draw.text((text_x, text_y), text, fill=(148, 163, 184, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
 def home():
     dfm_file = Path(__file__).resolve().parent / "dfm.html"
     if dfm_file.exists():
@@ -58,8 +70,8 @@ def home():
     return health_check()
 
 
-@app.get("/health")
-@app.get("/api/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health_check():
     return {
         "status": "healthy",
@@ -69,6 +81,33 @@ def health_check():
         "uptime_status": "ok",
         "renderer_available": generate_pcb_previews is not None,
     }
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    favicon_file = BASE_DIR / "static" / "favicon.ico"
+    if favicon_file.exists():
+        return FileResponse(str(favicon_file), media_type="image/x-icon")
+    return Response(status_code=204)
+
+
+@app.get("/projects/{project_id}/renders/{image_name}")
+def get_project_render(project_id: str, image_name: str):
+    file_path = PROJECT_DIR / project_id / "renders" / image_name
+    if file_path.exists():
+        return FileResponse(str(file_path), media_type="image/png")
+
+    render_dir = PROJECT_DIR / project_id / "renders"
+    if "bottom" in image_name.lower():
+        top_2d = render_dir / "pcb_top_2d.png"
+        if top_2d.exists():
+            return FileResponse(str(top_2d), media_type="image/png")
+        preview_2d = render_dir / "pcb_2d_preview.png"
+        if preview_2d.exists():
+            return FileResponse(str(preview_2d), media_type="image/png")
+
+    label = "No Bottom Layer" if "bottom" in image_name.lower() else "Preview Expired"
+    return Response(content=generate_placeholder_image(label), media_type="image/png")
 
 
 @app.get("/gerber_viewer.html")
