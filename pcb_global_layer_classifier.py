@@ -999,17 +999,17 @@ def classify_file(
             "source": "support/document file",
         }
 
-    layer = classify_filename(filename)
+    if ext in EXTENSION_LAYER_MAP:
+        layer = EXTENSION_LAYER_MAP[ext]
+        confidence = 96
+        source = "standard extension"
+    else:
+        layer = classify_filename(filename)
+        confidence = 90
+        source = "filename semantics"
+
     category = "drill" if layer in {"Drill", "PTH Drill", "NPTH Drill"} else "gerber" if file_type == "Gerber" else "other"
     if layer:
-        # Strong standard extension.
-        if ext in EXTENSION_LAYER_MAP:
-            confidence = 96
-            source = "standard extension"
-        else:
-            confidence = 90
-            source = "filename semantics"
-
         return {
             "filename": Path(filename).name,
             "extension": ext,

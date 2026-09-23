@@ -985,18 +985,15 @@ def _get_board_outline_shape(extracted_path, project_files, bounds, scale, paddi
                         }
 
             pixel_pts = [mm_to_pixel(x, y, bounds, scale, padding) for x, y in best_pts]
-            return {
-                "type": "polygon",
-                "points_px": pixel_pts,
-            }
-
-    pts = _gerber_points(outline_path)
-    if len(pts) >= 3:
-        pixel_pts = [mm_to_pixel(x, y, bounds, scale, padding) for x, y, cmd in pts]
-        return {
-            "type": "polygon",
-            "points_px": pixel_pts,
-        }
+            b_w_px = (bounds["max_x"] - bounds["min_x"]) * scale
+            b_h_px = (bounds["max_y"] - bounds["min_y"]) * scale
+            b_area_px = max(1.0, b_w_px * b_h_px)
+            
+            if len(pixel_pts) >= 4 and poly_area(pixel_pts) >= 0.35 * b_area_px:
+                return {
+                    "type": "polygon",
+                    "points_px": pixel_pts,
+                }
 
     return None
 
