@@ -152,6 +152,15 @@ button:hover{
     <button onclick="setSide('bottom')">Raw Bottom</button>
     <button onclick="setAll(true)">All</button>
     <button onclick="setAll(false)">None</button>
+    <select id="colorSelect" onchange="changePcbColor(this.value)" style="padding:6px 10px; border-radius:5px; border:1px solid #c9cdd1; background:#f4f5f6; font-weight:bold; font-size:12px; cursor:pointer;">
+        <option value="green">Color: Green</option>
+        <option value="purple">Color: Purple</option>
+        <option value="red">Color: Red</option>
+        <option value="yellow">Color: Yellow</option>
+        <option value="blue">Color: Blue</option>
+        <option value="white">Color: White</option>
+        <option value="black">Color: Black</option>
+    </select>
     <span id="status">Loading…</span>
 </div>
 
@@ -218,43 +227,137 @@ let dpr=1;
    the original copper underneath.
    ============================================================ */
 
-const PCB_COLORS={
-    board:"#186831",
+const PCB_COLOR_THEMES = {
+    green: {
+        board: "#186831",
+        copperCovered: "#29783B",
+        copperExposed: "#E4BA4D",
+        solderMask: "#186831",
+        silkscreen: "#FFFFFF",
+        drill: "#111111",
+        outline: "#FFFFFF",
+        background: "#E7E9EC"
+    },
+    purple: {
+        board: "#4B1970",
+        copperCovered: "#5F238A",
+        copperExposed: "#E4BA4D",
+        solderMask: "#4B1970",
+        silkscreen: "#FFFFFF",
+        drill: "#111111",
+        outline: "#FFFFFF",
+        background: "#E7E9EC"
+    },
+    red: {
+        board: "#A51919",
+        copperCovered: "#C32D2D",
+        copperExposed: "#E4BA4D",
+        solderMask: "#A51919",
+        silkscreen: "#FFFFFF",
+        drill: "#111111",
+        outline: "#FFFFFF",
+        background: "#E7E9EC"
+    },
+    yellow: {
+        board: "#D2A014",
+        copperCovered: "#EBB928",
+        copperExposed: "#E4BA4D",
+        solderMask: "#D2A014",
+        silkscreen: "#191919",
+        drill: "#111111",
+        outline: "#FFFFFF",
+        background: "#E7E9EC"
+    },
+    blue: {
+        board: "#1446A0",
+        copperCovered: "#235FC3",
+        copperExposed: "#E4BA4D",
+        solderMask: "#1446A0",
+        silkscreen: "#FFFFFF",
+        drill: "#111111",
+        outline: "#FFFFFF",
+        background: "#E7E9EC"
+    },
+    white: {
+        board: "#EBEFF0",
+        copperCovered: "#D7DCDE",
+        copperExposed: "#E4BA4D",
+        solderMask: "#EBEFF0",
+        silkscreen: "#191919",
+        drill: "#111111",
+        outline: "#333333",
+        background: "#E7E9EC"
+    },
+    black: {
+        board: "#1C1D1F",
+        copperCovered: "#2A2C30",
+        copperExposed: "#E4BA4D",
+        solderMask: "#1C1D1F",
+        silkscreen: "#FFFFFF",
+        drill: "#050505",
+        outline: "#888888",
+        background: "#E7E9EC"
+    }
+};
 
-    copperCovered:"#29783B",
-    copperExposed:"#E4BA4D",
+let activeColorKey = "green";
 
-    solderMask:"#186831",
-
-    silkscreen:"#FFFFFF",
-
-    drill:"#111111",
-
-    outline:"#FFFFFF",
-
-    background:"#E7E9EC"
+const PCB_COLORS = {
+    board: "#186831",
+    copperCovered: "#29783B",
+    copperExposed: "#E4BA4D",
+    solderMask: "#186831",
+    silkscreen: "#FFFFFF",
+    drill: "#111111",
+    outline: "#FFFFFF",
+    background: "#E7E9EC"
 };
 
 
 /* Colors used by individual/raw layer view */
-const layerColors={
-    "Board Outline":PCB_COLORS.outline,
+const layerColors = {
+    "Board Outline": PCB_COLORS.outline,
 
-    "Top Copper":PCB_COLORS.copperExposed,
-    "Bottom Copper":PCB_COLORS.copperExposed,
+    "Top Copper": PCB_COLORS.copperExposed,
+    "Bottom Copper": PCB_COLORS.copperExposed,
 
-    "Top Solder Mask":PCB_COLORS.solderMask,
-    "Bottom Solder Mask":PCB_COLORS.solderMask,
+    "Top Solder Mask": PCB_COLORS.solderMask,
+    "Bottom Solder Mask": PCB_COLORS.solderMask,
 
-    "Top Silkscreen":PCB_COLORS.silkscreen,
-    "Bottom Silkscreen":PCB_COLORS.silkscreen,
+    "Top Silkscreen": PCB_COLORS.silkscreen,
+    "Bottom Silkscreen": PCB_COLORS.silkscreen,
 
-    "Drill":PCB_COLORS.drill,
-    "PTH Drill":PCB_COLORS.drill,
-    "NPTH Drill":PCB_COLORS.drill,
+    "Drill": PCB_COLORS.drill,
+    "PTH Drill": PCB_COLORS.drill,
+    "NPTH Drill": PCB_COLORS.drill,
 
-    "Drill Drawing":"#ffffff"
+    "Drill Drawing": "#ffffff"
 };
+
+
+function changePcbColor(colorKey) {
+    colorKey = (colorKey || "green").toLowerCase();
+    const theme = PCB_COLOR_THEMES[colorKey] || PCB_COLOR_THEMES.green;
+    Object.assign(PCB_COLORS, theme);
+
+    layerColors["Top Solder Mask"] = PCB_COLORS.solderMask;
+    layerColors["Bottom Solder Mask"] = PCB_COLORS.solderMask;
+    layerColors["Top Silkscreen"] = PCB_COLORS.silkscreen;
+    layerColors["Bottom Silkscreen"] = PCB_COLORS.silkscreen;
+    layerColors["Board Outline"] = PCB_COLORS.outline;
+    layerColors["Drill"] = PCB_COLORS.drill;
+    layerColors["PTH Drill"] = PCB_COLORS.drill;
+    layerColors["NPTH Drill"] = PCB_COLORS.drill;
+    activeColorKey = colorKey;
+
+    const selectEl = document.getElementById("colorSelect");
+    if (selectEl && selectEl.value !== colorKey) {
+        selectEl.value = colorKey;
+    }
+
+    if (typeof buildLayerList === "function") buildLayerList();
+    if (typeof render === "function") render();
+}
 
 
 function colorFor(name){
@@ -2419,8 +2522,13 @@ async function loadViewer(){
             `${viewerData.layers.length} layers · ${dims} · ${viewerData.geometry_version||"legacy"}`;
 
 
-        /* Default PCB top composite */
+        /* Check URL parameter for PCB color */
+        const reqColor = params.get("color") || params.get("pcbColor");
+        if (reqColor && PCB_COLOR_THEMES[reqColor.toLowerCase()]) {
+            changePcbColor(reqColor.toLowerCase());
+        }
 
+        /* Default PCB top composite */
         renderComposite("top");
 
 
