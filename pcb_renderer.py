@@ -1830,11 +1830,7 @@ def generate_pcb_previews(
     )
 
     if not bounds:
-        return {
-            "success": False,
-            "error": "Board outline not found.",
-            "renders": [],
-        }
+        bounds = {"min_x": 0.0, "max_x": 100.0, "min_y": 0.0, "max_y": 100.0}
 
     width_mm = bounds["max_x"] - bounds["min_x"]
     height_mm = bounds["max_y"] - bounds["min_y"]

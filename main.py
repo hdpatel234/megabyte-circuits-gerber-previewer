@@ -93,21 +93,41 @@ def favicon():
 
 @app.get("/projects/{project_id}/renders/{image_name}")
 def get_project_render(project_id: str, image_name: str):
-    file_path = PROJECT_DIR / project_id / "renders" / image_name
+    project_path = PROJECT_DIR / project_id
+    render_dir = project_path / "renders"
+    file_path = render_dir / image_name
+
     if file_path.exists():
         return FileResponse(str(file_path), media_type="image/png")
 
-    render_dir = PROJECT_DIR / project_id / "renders"
-    if "bottom" in image_name.lower():
-        top_2d = render_dir / "pcb_top_2d.png"
-        if top_2d.exists():
-            return FileResponse(str(top_2d), media_type="image/png")
-        preview_2d = render_dir / "pcb_2d_preview.png"
-        if preview_2d.exists():
-            return FileResponse(str(preview_2d), media_type="image/png")
+    # On-demand preview rendering if project extracted files exist but renders are missing
+    extracted_path = project_path / "extracted"
+    if extracted_path.exists() and generate_pcb_previews is not None:
+        try:
+            project_files = get_project_files(extracted_path)
+            if project_files:
+                generate_pcb_previews(project_path, extracted_path, project_files)
+                if file_path.exists():
+                    return FileResponse(str(file_path), media_type="image/png")
+        except Exception as e:
+            print(f"On-demand preview generation failed for project {project_id}: {e}")
 
-    label = "No Bottom Layer" if "bottom" in image_name.lower() else "Preview Expired"
-    return Response(content=generate_placeholder_image(label), media_type="image/png")
+    # Fallback search inside renders directory
+    img_name_lower = image_name.lower()
+    is_bottom = "bottom" in img_name_lower or "back" in img_name_lower
+
+    candidates = (
+        ["pcb_bottom_2d_green.png", "pcb_bottom_2d.png", "pcb_top_2d_green.png", "pcb_top_2d.png", "pcb_2d_preview.png"]
+        if is_bottom
+        else ["pcb_top_2d_green.png", "pcb_top_2d.png", "pcb_2d_preview.png", "pcb_bottom_2d_green.png", "pcb_bottom_2d.png"]
+    )
+
+    for cand in candidates:
+        cand_path = render_dir / cand
+        if cand_path.exists():
+            return FileResponse(str(cand_path), media_type="image/png")
+
+    raise HTTPException(status_code=404, detail="Preview image not found")
 
 
 @app.get("/gerber_viewer.html")
