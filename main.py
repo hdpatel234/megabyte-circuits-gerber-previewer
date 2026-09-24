@@ -5271,6 +5271,18 @@ async def analyze_pcb(
         "pcb_previews":
             render_result,
 
+        "default_color":
+            "green",
+
+        "available_colors":
+            render_result.get("available_colors", ["green", "purple", "red", "yellow", "blue", "white", "black"]),
+
+        "previews_by_color":
+            render_result.get("previews_by_color", {}),
+
+        "previews":
+            render_result.get("previews_by_color", {}),
+
         "preview_2d":
             preview_2d,
 
@@ -5315,6 +5327,26 @@ async def analyze_pcb(
             ]
 
     }
+
+
+@app.get("/api/projects/{project_id}/preview")
+def get_color_preview(project_id: str, color: str = "green", side: str = "front"):
+    color_slug = (color or "green").lower()
+    valid_colors = ["green", "purple", "red", "yellow", "blue", "white", "black"]
+    if color_slug not in valid_colors:
+        color_slug = "green"
+
+    side_filename = f"pcb_top_2d_{color_slug}.png" if side in ["front", "top"] else f"pcb_bottom_2d_{color_slug}.png"
+    file_path = PROJECT_DIR / project_id / "renders" / side_filename
+
+    if file_path.exists():
+        return FileResponse(str(file_path), media_type="image/png")
+
+    fallback_file = PROJECT_DIR / project_id / "renders" / ("pcb_top_2d.png" if side in ["front", "top"] else "pcb_bottom_2d.png")
+    if fallback_file.exists():
+        return FileResponse(str(fallback_file), media_type="image/png")
+
+    raise HTTPException(status_code=404, detail="Preview image not found")
 
 
 # ============================================================

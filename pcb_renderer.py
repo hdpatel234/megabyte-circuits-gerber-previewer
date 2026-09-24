@@ -29,8 +29,103 @@ import gerber_patch
 
 
 # ============================================================
-# FILE / TEXT HELPERS
+# PCB COLOR CONFIGURATION SYSTEM
 # ============================================================
+
+PCB_COLORS = {
+    "green": {
+        "name": "Green",
+        "board_fill": (25, 112, 67),
+        "board_fill_nomask": (38, 73, 55),
+        "edge_color": (12, 61, 38),
+        "copper_under_mask": (35, 128, 76),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (245, 245, 240),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (5, 10, 7),
+    },
+    "purple": {
+        "name": "Purple",
+        "board_fill": (75, 25, 112),
+        "board_fill_nomask": (55, 20, 80),
+        "edge_color": (45, 10, 70),
+        "copper_under_mask": (95, 35, 138),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (245, 245, 240),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (20, 5, 30),
+    },
+    "red": {
+        "name": "Red",
+        "board_fill": (165, 25, 25),
+        "board_fill_nomask": (110, 20, 20),
+        "edge_color": (90, 10, 10),
+        "copper_under_mask": (195, 45, 45),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (245, 245, 240),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (30, 5, 5),
+    },
+    "yellow": {
+        "name": "Yellow",
+        "board_fill": (210, 160, 20),
+        "board_fill_nomask": (150, 110, 15),
+        "edge_color": (120, 90, 10),
+        "copper_under_mask": (235, 185, 40),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (25, 25, 25),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (40, 30, 5),
+    },
+    "blue": {
+        "name": "Blue",
+        "board_fill": (20, 70, 160),
+        "board_fill_nomask": (15, 45, 110),
+        "edge_color": (10, 30, 80),
+        "copper_under_mask": (35, 95, 195),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (245, 245, 240),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (5, 15, 40),
+    },
+    "white": {
+        "name": "White",
+        "board_fill": (235, 238, 240),
+        "board_fill_nomask": (180, 185, 190),
+        "edge_color": (150, 155, 160),
+        "copper_under_mask": (215, 220, 225),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (25, 25, 25),
+        "hole_fill": (8, 12, 10),
+        "ring_fill": (208, 183, 125),
+        "outline": (60, 65, 70),
+    },
+    "black": {
+        "name": "Black",
+        "board_fill": (28, 29, 31),
+        "board_fill_nomask": (18, 19, 20),
+        "edge_color": (12, 12, 14),
+        "copper_under_mask": (42, 44, 48),
+        "solder_mask": (208, 183, 125),
+        "silkscreen": (245, 245, 240),
+        "hole_fill": (5, 5, 5),
+        "ring_fill": (208, 183, 125),
+        "outline": (5, 5, 5),
+    },
+}
+
+_READ_CACHE = {}
+
+
+def clear_read_cache():
+    global _READ_CACHE
+    _READ_CACHE.clear()
+
 
 def _read_text(path):
     try:
@@ -41,13 +136,18 @@ def _read_text(path):
 
 def _safe_read(path):
     """Read Gerber without allowing one bad layer to stop all previews."""
+    path_str = str(path)
+    if path_str in _READ_CACHE:
+        return _READ_CACHE[path_str]
     try:
-        g = gerber.read(str(path))
+        g = gerber.read(path_str)
         if g and str(getattr(g, "units", "metric")).lower() == "inch":
             g.to_metric()
+        _READ_CACHE[path_str] = g
         return g
     except Exception as e:
         print(f"Gerber read error: {path}: {e}")
+        _READ_CACHE[path_str] = None
         return None
 
 
@@ -1220,16 +1320,20 @@ def _draw_board_base(
     board_rect,
     mask_exists=True,
     shape=None,
+    color_cfg=None,
 ):
     """
     Realistic-ish FR4/solder-mask base.
     """
-    if mask_exists:
-        board_fill = (25, 112, 67)
-    else:
-        board_fill = (38, 73, 55)
+    if color_cfg is None:
+        color_cfg = PCB_COLORS["green"]
 
-    edge_color = (12, 61, 38)
+    if mask_exists:
+        board_fill = color_cfg["board_fill"]
+    else:
+        board_fill = color_cfg["board_fill_nomask"]
+
+    edge_color = color_cfg["edge_color"]
 
     if shape:
         stype = shape.get("type")
@@ -1287,7 +1391,10 @@ def _render_2d_top(
     padding,
     width,
     height,
+    color_key="green",
 ):
+    color_cfg = PCB_COLORS.get(color_key, PCB_COLORS["green"])
+
     shape = _get_board_outline_shape(
         extracted_path,
         project_files,
@@ -1318,6 +1425,7 @@ def _render_2d_top(
             "Top Solder Mask",
         ),
         shape=shape,
+        color_cfg=color_cfg,
     )
 
     # Top copper (under soldermask)
@@ -1330,7 +1438,7 @@ def _render_2d_top(
         scale,
         padding,
         {
-            "Top Copper": (35, 128, 76),
+            "Top Copper": color_cfg["copper_under_mask"],
         },
         copper_layers={"Top Copper"},
     )
@@ -1345,7 +1453,7 @@ def _render_2d_top(
         scale,
         padding,
         {
-            "Top Solder Mask": (208, 183, 125),
+            "Top Solder Mask": color_cfg["solder_mask"],
         },
     )
 
@@ -1359,7 +1467,7 @@ def _render_2d_top(
         scale,
         padding,
         {
-            "Top Silkscreen": (245, 245, 240),
+            "Top Silkscreen": color_cfg["silkscreen"],
         },
     )
 
@@ -1371,8 +1479,8 @@ def _render_2d_top(
         bounds,
         scale,
         padding,
-        hole_fill=(8, 12, 10),
-        ring_fill=(208, 183, 125),
+        hole_fill=color_cfg["hole_fill"],
+        ring_fill=color_cfg["ring_fill"],
     )
 
     draw_board_outline(
@@ -1382,7 +1490,7 @@ def _render_2d_top(
         bounds,
         scale,
         padding,
-        fill=(5, 10, 7),
+        fill=color_cfg["outline"],
         width=max(2, int(scale * 0.16)),
         shape=shape,
     )
@@ -1422,7 +1530,10 @@ def _render_2d_bottom(
     padding,
     width,
     height,
+    color_key="green",
 ):
+    color_cfg = PCB_COLORS.get(color_key, PCB_COLORS["green"])
+
     shape = _get_board_outline_shape(
         extracted_path,
         project_files,
@@ -1453,6 +1564,7 @@ def _render_2d_bottom(
             "Bottom Solder Mask",
         ),
         shape=shape,
+        color_cfg=color_cfg,
     )
 
     # Bottom copper (under soldermask)
@@ -1465,7 +1577,7 @@ def _render_2d_bottom(
         scale,
         padding,
         {
-            "Bottom Copper": (35, 128, 76),
+            "Bottom Copper": color_cfg["copper_under_mask"],
         },
         copper_layers={"Bottom Copper"},
     )
@@ -1480,7 +1592,7 @@ def _render_2d_bottom(
         scale,
         padding,
         {
-            "Bottom Solder Mask": (208, 183, 125),
+            "Bottom Solder Mask": color_cfg["solder_mask"],
         },
     )
 
@@ -1494,7 +1606,7 @@ def _render_2d_bottom(
         scale,
         padding,
         {
-            "Bottom Silkscreen": (245, 245, 240),
+            "Bottom Silkscreen": color_cfg["silkscreen"],
         },
     )
 
@@ -1506,8 +1618,8 @@ def _render_2d_bottom(
         bounds,
         scale,
         padding,
-        hole_fill=(8, 12, 10),
-        ring_fill=(208, 183, 125),
+        hole_fill=color_cfg["hole_fill"],
+        ring_fill=color_cfg["ring_fill"],
     )
 
     draw_board_outline(
@@ -1517,7 +1629,7 @@ def _render_2d_bottom(
         bounds,
         scale,
         padding,
-        fill=(5, 10, 7),
+        fill=color_cfg["outline"],
         width=max(2, int(scale * 0.16)),
         shape=shape,
     )
@@ -1697,25 +1809,16 @@ def generate_pcb_previews(
     project_files,
 ):
     """
-    Generate all four PCB previews.
+    Generate PCB previews for all supported colors:
+    green, purple, red, yellow, blue, white, black.
 
-    Backward-compatible files:
-        pcb_2d_preview.png  -> TOP 2D
-        pcb_3d_preview.png  -> TOP 3D
-
-    New files:
-        pcb_top_2d.png
-        pcb_bottom_2d.png
-        pcb_top_3d.png
-        pcb_bottom_3d.png
+    The PCB geometry is parsed/calculated once, then rendered in each color.
     """
+    clear_read_cache()
     project_path = Path(project_path)
     extracted_path = Path(extracted_path)
 
-    render_dir = (
-        project_path / "renders"
-    )
-
+    render_dir = project_path / "renders"
     render_dir.mkdir(
         parents=True,
         exist_ok=True,
@@ -1733,15 +1836,8 @@ def generate_pcb_previews(
             "renders": [],
         }
 
-    width_mm = (
-        bounds["max_x"] -
-        bounds["min_x"]
-    )
-
-    height_mm = (
-        bounds["max_y"] -
-        bounds["min_y"]
-    )
+    width_mm = bounds["max_x"] - bounds["min_x"]
+    height_mm = bounds["max_y"] - bounds["min_y"]
 
     # High enough resolution for normal DFM viewing.
     scale = 12
@@ -1763,170 +1859,113 @@ def generate_pcb_previews(
         )),
     )
 
-    # --------------------------------------------------------
-    # TOP 2D
-    # --------------------------------------------------------
-    top_2d = _render_2d_top(
-        extracted_path,
-        project_files,
-        bounds,
-        scale,
-        padding,
-        image_width,
-        image_height,
-    )
+    previews_by_color = {}
+    renders = []
 
-    top_2d_path = (
-        render_dir / "pcb_top_2d.png"
-    )
+    top_2d_green = None
+    bottom_2d_green = None
 
-    top_2d.save(
-        top_2d_path,
-        "PNG",
-    )
+    # Render all 7 PCB color variants efficiently from single geometry
+    for c_key in PCB_COLORS:
+        top_2d = _render_2d_top(
+            extracted_path,
+            project_files,
+            bounds,
+            scale,
+            padding,
+            image_width,
+            image_height,
+            color_key=c_key,
+        )
+        top_path = render_dir / f"pcb_top_2d_{c_key}.png"
+        top_2d.save(top_path, "PNG")
 
-    # Backward compatibility.
-    legacy_2d_path = (
-        render_dir / "pcb_2d_preview.png"
-    )
+        bottom_2d = _render_2d_bottom(
+            extracted_path,
+            project_files,
+            bounds,
+            scale,
+            padding,
+            image_width,
+            image_height,
+            color_key=c_key,
+        )
+        bottom_path = render_dir / f"pcb_bottom_2d_{c_key}.png"
+        bottom_2d.save(bottom_path, "PNG")
 
-    top_2d.save(
-        legacy_2d_path,
-        "PNG",
-    )
+        rel_top = f"/projects/{project_path.name}/renders/pcb_top_2d_{c_key}.png"
+        rel_bottom = f"/projects/{project_path.name}/renders/pcb_bottom_2d_{c_key}.png"
 
-    # --------------------------------------------------------
-    # BOTTOM 2D
-    # --------------------------------------------------------
-    bottom_2d = _render_2d_bottom(
-        extracted_path,
-        project_files,
-        bounds,
-        scale,
-        padding,
-        image_width,
-        image_height,
-    )
+        previews_by_color[c_key] = {
+            "front": rel_top,
+            "back": rel_bottom,
+        }
 
-    bottom_2d_path = (
-        render_dir / "pcb_bottom_2d.png"
-    )
+        renders.extend([
+            {
+                "name": f"2D Top View ({c_key})",
+                "side": "top",
+                "color": c_key,
+                "dimension": "2d",
+                "path": str(top_path),
+            },
+            {
+                "name": f"2D Bottom View ({c_key})",
+                "side": "bottom",
+                "color": c_key,
+                "dimension": "2d",
+                "path": str(bottom_path),
+            },
+        ])
 
-    bottom_2d.save(
-        bottom_2d_path,
-        "PNG",
-    )
+        if c_key == "green":
+            top_2d_green = top_2d
+            bottom_2d_green = bottom_2d
 
-    # --------------------------------------------------------
-    # TOP 3D
-    # --------------------------------------------------------
-    top_3d = _render_3d_top(
-        top_2d,
-    )
+            # Backward compatibility filenames
+            legacy_top = render_dir / "pcb_top_2d.png"
+            top_2d.save(legacy_top, "PNG")
 
-    top_3d_path = (
-        render_dir / "pcb_top_3d.png"
-    )
+            legacy_bot = render_dir / "pcb_bottom_2d.png"
+            bottom_2d.save(legacy_bot, "PNG")
 
-    top_3d.save(
-        top_3d_path,
-        "PNG",
-    )
+            legacy_2d = render_dir / "pcb_2d_preview.png"
+            top_2d.save(legacy_2d, "PNG")
 
-    # Backward compatibility.
-    legacy_3d_path = (
-        render_dir / "pcb_3d_preview.png"
-    )
+            top_3d = _render_3d_top(top_2d)
+            legacy_top_3d = render_dir / "pcb_top_3d.png"
+            top_3d.save(legacy_top_3d, "PNG")
+            legacy_3d = render_dir / "pcb_3d_preview.png"
+            top_3d.save(legacy_3d, "PNG")
 
-    top_3d.save(
-        legacy_3d_path,
-        "PNG",
-    )
-
-    # --------------------------------------------------------
-    # BOTTOM 3D
-    # --------------------------------------------------------
-    bottom_3d = _render_3d_bottom(
-        bottom_2d,
-    )
-
-    bottom_3d_path = (
-        render_dir / "pcb_bottom_3d.png"
-    )
-
-    bottom_3d.save(
-        bottom_3d_path,
-        "PNG",
-    )
+            bot_3d = _render_3d_bottom(bottom_2d)
+            legacy_bot_3d = render_dir / "pcb_bottom_3d.png"
+            bot_3d.save(legacy_bot_3d, "PNG")
 
     # --------------------------------------------------------
     # DRILL COUNT
     # --------------------------------------------------------
     drill_count = 0
-
     for path in _drill_files(extracted_path, project_files):
         if path.exists():
-            drill_count += len(
-                _parse_excellon_drill(path)
-            )
+            drill_count += len(_parse_excellon_drill(path))
 
     return {
         "success": True,
-
         "board_size_mm": {
             "width": round(width_mm, 4),
             "height": round(height_mm, 4),
         },
-
         "drill_hits_rendered": drill_count,
-
-        # Explicit paths for the new viewer.
-        "preview_top_2d": str(top_2d_path),
-        "preview_bottom_2d": str(bottom_2d_path),
-        "preview_top_3d": str(top_3d_path),
-        "preview_bottom_3d": str(bottom_3d_path),
-
-        "renders": [
-            {
-                "name": "2D Top View",
-                "side": "top",
-                "dimension": "2d",
-                "path": str(top_2d_path),
-            },
-            {
-                "name": "2D Bottom View",
-                "side": "bottom",
-                "dimension": "2d",
-                "path": str(bottom_2d_path),
-            },
-            {
-                "name": "3D Top View",
-                "side": "top",
-                "dimension": "3d",
-                "path": str(top_3d_path),
-            },
-            {
-                "name": "3D Bottom View",
-                "side": "bottom",
-                "dimension": "3d",
-                "path": str(bottom_3d_path),
-            },
-
-            # Legacy entries kept so the current main.py continues
-            # to find a 2D and 3D preview.
-            {
-                "name": "2D PCB Preview",
-                "side": "top",
-                "dimension": "2d",
-                "path": str(legacy_2d_path),
-            },
-            {
-                "name": "3D PCB Preview",
-                "side": "top",
-                "dimension": "3d",
-                "path": str(legacy_3d_path),
-            },
-        ],
+        "default_color": "green",
+        "available_colors": list(PCB_COLORS.keys()),
+        "previews_by_color": previews_by_color,
+        "previews": previews_by_color,
+        "preview_top_2d": str(render_dir / "pcb_top_2d_green.png"),
+        "preview_bottom_2d": str(render_dir / "pcb_bottom_2d_green.png"),
+        "preview_top_3d": str(render_dir / "pcb_top_3d.png"),
+        "preview_bottom_3d": str(render_dir / "pcb_bottom_3d.png"),
+        "renders": renders,
     }
 
 
